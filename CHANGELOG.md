@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [新增] 增加 Windows `.bat` 独立启动器并适配 Windows 浏览器启动、Agent 配置权限处理、Skill ZIP 导入及本机 Codex 生图 CLI；独立 Agent 改用 17376 端口，并明确 AIFISHER 移植功能的授权范围。
 + [优化] 组节点采用“顶部目录栏”样式：蓝色半透明容器、完整标题分隔栏、组图标、名称和成员数量；组内超大图片自动收敛为最长边 320px 的缩略图，并提高低缩放时标题和成员 UI 的可读性。图片首行、每行文件信息和相邻缩略图间增加留白，未选中组改用普通节点描边。
 + [新增] 默认 OpenAI 生图模型升级为 GPT Image 2.5 Sunburst，并新增 GPT Image 2.5 Flare 与 GPT Image 2 兼容回退；Sunburst / Flare 提供 xhigh、max 质量档位，旧模型及本机 Codex 直连不会伪装为 2.5。
 + [修复] RunningHub 卡片不再显示与卡内标题重复的外置名称；图片拖入纯图片组或将图片选区组合时，按原有画布阅读顺序自动网格整理，并在需要时扩展或收紧组边界。

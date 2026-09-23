@@ -102,7 +102,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     panelMounted: true,
     panelClosing: false,
     canvasContext: null,
-    url: typeof window === "undefined" ? "http://127.0.0.1:17375" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17375",
+    url: typeof window === "undefined" ? "http://127.0.0.1:17376" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17376",
     token: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-token") || "",
     connected: false,
     enabled: false,

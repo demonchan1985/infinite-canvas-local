@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const url = "http://127.0.0.1:3102/canvas";
+const agentPort = 17376;
 
 // 端口冲突时停止，不终止原版或其他进程，也不自动改用别的端口。
 async function checkPort(port) {
@@ -18,13 +19,13 @@ async function checkPort(port) {
 
 try {
     await checkPort(3102);
-    await checkPort(17375);
+    await checkPort(agentPort);
 } catch (error) {
     console.error(error.message);
     process.exit(1);
 }
 
-const agent = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "src/index.ts"], { cwd: path.join(root, "canvas-agent"), env: { ...process.env, PORT: "17375" }, stdio: ["ignore", "pipe", "inherit"] });
+const agent = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "src/index.ts"], { cwd: path.join(root, "canvas-agent"), env: { ...process.env, PORT: String(agentPort) }, stdio: ["ignore", "pipe", "inherit"] });
 const web = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "3102", "--strictPort"], { cwd: path.join(root, "web"), stdio: ["ignore", "pipe", "inherit"] });
 let stopping = false;
 let opened = false;
@@ -36,7 +37,13 @@ function openWhenReady() {
     const config = JSON.parse(readFileSync(path.join(root, "canvas-agent/.runtime/canvas-agent.json"), "utf8"));
     const fragment = new URLSearchParams({ agentUrl: config.url, agentToken: config.token });
     console.log(`独立画布：${url}\n原版 3101 未改动；按 Ctrl+C 停止本次启动的独立服务。`);
-    if (!process.argv.includes("--no-open")) spawn("open", [`${url}#${fragment}`], { stdio: "ignore" }).on("error", () => console.log(`请手动打开 ${url}`));
+    if (process.argv.includes("--no-open")) return;
+    const target = `${url}#${fragment}`;
+    const command = process.platform === "win32" ? "rundll32.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+    const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", target] : [target];
+    spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true })
+        .once("error", () => console.log(`自动打开失败，请手动打开 ${url}`))
+        .unref();
 }
 function stop(code = 0) {
     if (stopping) return;

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const DEFAULT_PORT = 17375;
+export const DEFAULT_PORT = 17376;
 // 独立副本的配置、会话和工作空间不写入原版的用户目录。
 export const CONFIG_DIR = fileURLToPath(new URL("../.runtime/", import.meta.url));
 export const CONFIG_FILE = path.join(CONFIG_DIR, "canvas-agent.json");
@@ -35,8 +35,10 @@ export function saveConfig(config: CanvasAgentConfig) {
 export function writeConfigFile(dir: string, file: string, config: CanvasAgentConfig) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(file, JSON.stringify(config, null, 2), { mode: 0o600 });
-    fs.chmodSync(dir, 0o700);
-    fs.chmodSync(file, 0o600);
+    if (process.platform !== "win32") {
+        fs.chmodSync(dir, 0o700);
+        fs.chmodSync(file, 0o600);
+    }
 }
 
 /** 确保站点级 Codex 工作空间存在并已初始化。 */

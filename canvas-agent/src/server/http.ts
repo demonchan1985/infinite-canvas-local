@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -16,6 +17,7 @@ import { logger } from "../utils/logger.js";
 import { SkillStore, SkillStoreError } from "../skills/store.js";
 
 const CODEX_IMAGEGEN_TIMEOUT_MS = 3 * 60 * 1000;
+const codexImageSkillCli = createRequire(import.meta.url).resolve("gpt-image-2-skill/bin/gpt-image-2-skill.js");
 
 /** 启动仅监听本机的 Canvas Agent HTTP 服务。 */
 export function startHttpServer() {
@@ -621,17 +623,17 @@ async function runCodexImage25Skill(requestPath: string, outputPath: string, pro
 }
 
 function runCodexImageSkill(prompt: string, imagePaths: string[], outputPath: string, imageOptions: { size?: string; quality?: string }, cwd: string) {
-    const executable = process.env.GPT_IMAGE_2_SKILL_BIN || path.join(os.homedir(), ".local", "node", "bin", "gpt-image-2-skill");
     const args = ["--json", "--provider", "codex", "images", imagePaths.length ? "edit" : "generate", "--prompt", prompt, "--out", outputPath, "--size", imageOptions.size || "auto", "--quality", imageOptions.quality || "auto", "--format", "png"];
     if (imagePaths.length) imagePaths.forEach((filePath) => args.push("--ref-image", filePath));
-    return runCodexImageCommand(args, cwd, executable);
+    return runCodexImageCommand(args, cwd);
 }
 
-function runCodexImageCommand(args: string[], cwd: string, executable = process.env.GPT_IMAGE_2_SKILL_BIN || path.join(os.homedir(), ".local", "node", "bin", "gpt-image-2-skill")) {
+function runCodexImageCommand(args: string[], cwd: string) {
     return new Promise<{ code: number; stdout: string; stderr: string; imagePath?: string }>((resolve, reject) => {
-        // LaunchAgent 的默认 PATH 不含用户 Node 目录；codex 启动脚本使用 `env node`。
+        // 子进程仍可能通过 PATH 寻找 Node，补上当前运行时目录。
         const nodeBin = path.dirname(process.execPath);
-        const child = spawn(executable, args, {
+        const override = process.env.GPT_IMAGE_2_SKILL_BIN;
+        const child = spawn(override || process.execPath, override ? args : [codexImageSkillCli, ...args], {
             cwd,
             detached: true,
             stdio: ["pipe", "pipe", "pipe"],

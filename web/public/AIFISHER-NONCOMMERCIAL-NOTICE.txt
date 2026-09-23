@@ -1,6 +1,8 @@
-This project includes selected creative preset catalogs, prompt/style preview assets,
-and related adapted UI code migrated from AIFISHER. These files are separately
-licensed and are not covered by the upstream MIT license.
+Infinite Canvas is an independent project based on basketikun/infinite-canvas; it
+is not a modification or port of the AIFISHER application. Style and MJ-code
+catalog features were ported and adapted from AIFISHER for this canvas. This notice
+covers only the following catalog data, preview assets, and catalog adaptation
+code. It does not apply to the canvas architecture or unrelated project code.
 
 Copyright (c) 2026 Work-Fisher and contributing copyright holders.
 License: AIFISHER Noncommercial Source License 1.0.
@@ -8,8 +10,7 @@ License: AIFISHER Noncommercial Source License 1.0.
 Covered paths:
 - web/src/lib/canvas/aifisher-creative-catalog.json
 - web/src/lib/canvas/aifisher-mj-style-catalog.json
-- web/src/lib/canvas/canvas-creative-presets.ts
-- web/src/components/canvas/canvas-creative-tools.tsx
+- Catalog-loading and prompt-normalization portions of web/src/lib/canvas/canvas-creative-presets.ts
 - web/public/creative-presets/
 - web/public/mj-styles/
 
@@ -20,5 +21,5 @@ notices and a clear description of modifications. Commercial use, commercial
 derivative products, paid projects, paid hosting and SaaS are prohibited unless
 separately authorized in writing by the copyright holder.
 
-Modification: adapted catalog selection, prompt composition, and node UI for
-Infinite Canvas. The original AIFISHER prompt-library page is not included.
+Modification: the catalog features were adapted for use by Infinite Canvas. The
+original AIFISHER prompt-library page and application UI are not included.

@@ -81,7 +81,7 @@ function directCodexImagegen(): Plugin {
             try {
                 const runtimePath = resolve(webDir, "../canvas-agent/.runtime/canvas-agent.json");
                 const runtime = JSON.parse(await readFile(runtimePath, "utf8")) as { url?: string; token?: string };
-                const endpoint = String(runtime.url || "http://127.0.0.1:17375").replace(/\/$/, "");
+                const endpoint = String(runtime.url || "http://127.0.0.1:17376").replace(/\/$/, "");
                 const response = await fetch(`${endpoint}/agent/codex/models?token=${encodeURIComponent(String(runtime.token || ""))}`);
                 const payload = await response.json().catch(() => ({}));
                 res.statusCode = response.status;
@@ -339,7 +339,7 @@ function methodNotAllowed(res: { statusCode: number; end: (body?: string) => voi
 async function forwardCodexImagegenToAgent(body: CodexImageRequest, res: { statusCode: number; setHeader: (name: string, value: string) => void; end: (body?: string) => void }) {
     const runtimePath = resolve(webDir, "../canvas-agent/.runtime/canvas-agent.json");
     const runtime = JSON.parse(await readFile(runtimePath, "utf8")) as { url?: string; token?: string };
-    const endpoint = String(runtime.url || "http://127.0.0.1:17375").replace(/\/$/, "");
+    const endpoint = String(runtime.url || "http://127.0.0.1:17376").replace(/\/$/, "");
     const response = await fetch(`${endpoint}/agent/codex/imagegen?token=${encodeURIComponent(String(runtime.token || ""))}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

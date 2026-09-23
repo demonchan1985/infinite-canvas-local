@@ -1171,7 +1171,7 @@ export default {
             disconnect: "断开",
             connect: "连接",
             localAddress: "本地地址",
-            urlPlaceholder: "例如 http://127.0.0.1:17371",
+            urlPlaceholder: "例如 http://127.0.0.1:17376",
             token: "连接 Token",
             tokenPlaceholder: "自动发现，或手动填入 Connect token",
         },

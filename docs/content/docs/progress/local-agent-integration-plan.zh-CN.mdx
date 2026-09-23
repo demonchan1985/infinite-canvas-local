@@ -76,20 +76,20 @@ node dist/index.js
 
 ```txt
 Infinite Canvas Agent
-Local URL: http://127.0.0.1:17371
+Local URL: http://127.0.0.1:17376
 Connect token: xxxxxx
 ```
 
-网页侧边栏填写或自动发现 `http://127.0.0.1:17371` 和 token 后连接本机服务。
+网页侧边栏填写或自动发现 `http://127.0.0.1:17376` 和 token 后连接本机服务。
 
 ## 前端需要增加的能力
 
 前端不直接暴露 HTTP 接口给本机服务，优先由网页主动连接本机 Canvas Agent。当前 MVP 使用 SSE 接收本机事件，HTTP POST 上报画布状态和工具结果：
 
 ```txt
-网页 -> http://127.0.0.1:17371/events?token=xxx
-网页 -> http://127.0.0.1:17371/canvas/state?token=xxx
-网页 -> http://127.0.0.1:17371/canvas/result?token=xxx
+网页 -> http://127.0.0.1:17376/events?token=xxx
+网页 -> http://127.0.0.1:17376/canvas/state?token=xxx
+网页 -> http://127.0.0.1:17376/canvas/result?token=xxx
 ```
 
 前端需要提供一个画布 Agent 控制层，内部调用现有 store / hook，不直接让外部操作 React 组件：

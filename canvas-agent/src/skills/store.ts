@@ -340,11 +340,14 @@ async function skillMarkdownFromZip(archive: Buffer) {
     const archivePath = path.join(tempDir, "skill.zip");
     try {
         await fs.writeFile(archivePath, archive, { flag: "wx" });
-        const { stdout } = await execFileAsync("/usr/bin/unzip", ["-Z1", archivePath], { maxBuffer: 256 * 1024, timeout: 8_000 });
+        const windows = process.platform === "win32";
+        const unzip = windows ? "tar.exe" : "unzip";
+        const { stdout } = await execFileAsync(unzip, windows ? ["-tf", archivePath] : ["-Z1", archivePath], { maxBuffer: 256 * 1024, timeout: 8_000 });
         const entries = stdout.split(/\r?\n/).filter((entry) => /(?:^|\/)SKILL\.md$/i.test(entry) && !entry.includes(".."));
         if (!entries.length) throw new SkillStoreError("ZIP 中找不到 SKILL.md", 400);
         const entry = entries.sort((a, b) => a.length - b.length)[0];
-        const result = await execFileAsync("/usr/bin/unzip", ["-p", archivePath, entry], { encoding: "buffer", maxBuffer: MAX_IMPORT_BYTES, timeout: 8_000 });
+        const args = windows ? ["-xOf", archivePath, "--", entry] : ["-p", archivePath, entry];
+        const result = await execFileAsync(unzip, args, { encoding: "buffer", maxBuffer: MAX_IMPORT_BYTES, timeout: 8_000 });
         const content = Buffer.from(result.stdout);
         if (!content.length || content.length > MAX_IMPORT_BYTES) throw new SkillStoreError("ZIP 中的 SKILL.md 必须在 2MiB 以内", 400);
         return content.toString("utf8");

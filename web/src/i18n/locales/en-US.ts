@@ -1224,7 +1224,7 @@ export default {
             disconnect: "Disconnect",
             connect: "Connect",
             localAddress: "Local address",
-            urlPlaceholder: "For example http://127.0.0.1:17371",
+            urlPlaceholder: "For example http://127.0.0.1:17376",
             token: "Connection token",
             tokenPlaceholder: "Discover automatically or enter the Connect token",
         },

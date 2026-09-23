@@ -30,7 +30,7 @@ node dist/index.js
 启动后会输出本机地址和 token：
 
 ```txt
-Local URL: http://127.0.0.1:17371
+Local URL: http://127.0.0.1:17376
 Connect token: xxxxxx
 ```
 

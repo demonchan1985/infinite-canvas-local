@@ -31,7 +31,7 @@ export function AgentConnectView({
 }) {
     const { t } = useTranslation();
     const { message } = App.useApp();
-    const steps = [{ title: "独立版启动方式", text: "双击本项目目录中的“启动独立画布.command”。启动器会运行独立 Agent（17375）并自动连接，不会修改原版插件或 3101 画布。", command: "node scripts/start-local.mjs" }];
+    const steps = [{ title: "独立版启动方式", text: "macOS 双击“启动独立画布.command”；Windows 双击“启动独立画布.bat”。启动器会运行独立 Agent（17376）并自动连接，不会修改原版插件或 3101 画布。", command: "node scripts/start-local.mjs" }];
     const statusText = connectError ? t("agent.status.failed") : connected ? activity : enabled ? t("agent.status.connecting") : t("agent.status.disconnected");
     const statusColor = connectError ? "#dc2626" : connected ? "#16a34a" : enabled ? "#d97706" : theme.node.muted;
     const copyCommand = (command: string) => {

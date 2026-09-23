@@ -25,6 +25,7 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@openai/codex": "0.146.0",
     "express": "^5.1.0",
+    "gpt-image-2-skill": "0.7.4",
     "gray-matter": "^4.0.3",
     "strip-ansi": "7.2.0",
     "winston": "^3.19.0",

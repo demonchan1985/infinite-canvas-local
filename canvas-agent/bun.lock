@@ -8,6 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.12.1",
         "@openai/codex": "0.146.0",
         "express": "^5.1.0",
+        "gpt-image-2-skill": "0.7.4",
         "gray-matter": "^4.0.3",
         "strip-ansi": "7.2.0",
         "winston": "^3.19.0",
@@ -220,6 +221,24 @@
     "get-proto": ["get-proto@1.0.1", "https://registry.npmmirror.com/get-proto/-/get-proto-1.0.1.tgz", { "dependencies": { "dunder-proto": "^1.0.1", "es-object-atoms": "^1.0.0" } }, "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g=="],
 
     "gopd": ["gopd@1.2.0", "https://registry.npmmirror.com/gopd/-/gopd-1.2.0.tgz", {}, "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg=="],
+
+    "gpt-image-2-skill": ["gpt-image-2-skill@0.7.4", "", { "optionalDependencies": { "gpt-image-2-skill-darwin-arm64": "0.7.4", "gpt-image-2-skill-darwin-x64": "0.7.4", "gpt-image-2-skill-linux-arm64-gnu": "0.7.4", "gpt-image-2-skill-linux-arm64-static": "0.7.4", "gpt-image-2-skill-linux-x64-gnu": "0.7.4", "gpt-image-2-skill-linux-x64-static": "0.7.4", "gpt-image-2-skill-windows-arm64-msvc": "0.7.4", "gpt-image-2-skill-windows-x64-msvc": "0.7.4" }, "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill.js" } }, "sha512-sDX+dB1gy/wqiRbhXXt8frKrw1ALmtFhpMt2zcwtjtPJKamfxQS/5H7TMt3vg+lLbRYCgmMAksi/aTfXQCf4QQ=="],
+
+    "gpt-image-2-skill-darwin-arm64": ["gpt-image-2-skill-darwin-arm64@0.7.4", "", { "os": "darwin", "cpu": "arm64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill" } }, "sha512-TeSFNe0uPoFteXpIntr3prWPhOn7Q/YU+EQaqnPo/FEFX11XU89jxxPaJhMXAJP1zbKkvwtU119OJqJ1fQ7f8Q=="],
+
+    "gpt-image-2-skill-darwin-x64": ["gpt-image-2-skill-darwin-x64@0.7.4", "", { "os": "darwin", "cpu": "x64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill" } }, "sha512-hg0nviLIqly6JQBu6qQMn/TszPpjmpBpenPiGXps1ryXCWNUnhrPSTpZt2YAzSDGOaUE97CHtc2keb3kZaQURQ=="],
+
+    "gpt-image-2-skill-linux-arm64-gnu": ["gpt-image-2-skill-linux-arm64-gnu@0.7.4", "", { "os": "linux", "cpu": "arm64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill" } }, "sha512-4RM2qt00zf3UTLLOFYAyGgQazqoZUm1Qj0Fzu0N9+aWL4yVPAp3zmGD7iDn4+7wwAtSesT9ZuFOm48mUcKyeKQ=="],
+
+    "gpt-image-2-skill-linux-arm64-static": ["gpt-image-2-skill-linux-arm64-static@0.7.4", "", { "os": "linux", "cpu": "arm64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill" } }, "sha512-HcZ19RN01whRWV4QpQNheblseJVDPRvy4PVUpLVBw03yXU+hAgUfGyONLA69u3a2+wG58ByDbYGVmzzvdmsuog=="],
+
+    "gpt-image-2-skill-linux-x64-gnu": ["gpt-image-2-skill-linux-x64-gnu@0.7.4", "", { "os": "linux", "cpu": "x64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill" } }, "sha512-kqMAhM7dwal+70xVnG5RBNwTB38ShZfd+5Qpvq3zwcDRLw4JWaJE2t4phQvIgUYwZq7qIyVTgs4yB4cE4U6M5A=="],
+
+    "gpt-image-2-skill-linux-x64-static": ["gpt-image-2-skill-linux-x64-static@0.7.4", "", { "os": "linux", "cpu": "x64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill" } }, "sha512-YWG+oYbd3H3meRGFZ1qpNZKi8wmr3zSfd94QDkVJ2V6lN40R3QjhyODwLVPi7pUKrJBro9kSR5VUucyIO4svqg=="],
+
+    "gpt-image-2-skill-windows-arm64-msvc": ["gpt-image-2-skill-windows-arm64-msvc@0.7.4", "", { "os": "win32", "cpu": "arm64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill.exe" } }, "sha512-6DDQnz1SF67qtMX+t2t0N/4ZXzt7uJmBlkHHGINyUdGm0uJnukSpoD+v9eEBdAE29HmOdN/ByfS2Y8boEbyOMA=="],
+
+    "gpt-image-2-skill-windows-x64-msvc": ["gpt-image-2-skill-windows-x64-msvc@0.7.4", "", { "os": "win32", "cpu": "x64", "bin": { "gpt-image-2-skill": "bin/gpt-image-2-skill.exe" } }, "sha512-Y+fnO+e3uUS/+dP13Q58+3eFDHAaU1UNdqi5/CtKsyOv2f9H4wRw8SOTk3LcpZbTpqgBa316mJOE5FyLX2/9tg=="],
 
     "gray-matter": ["gray-matter@4.0.3", "", { "dependencies": { "js-yaml": "^3.13.1", "kind-of": "^6.0.2", "section-matter": "^1.0.0", "strip-bom-string": "^1.0.0" } }, "sha512-5v6yZd4JK3eMI3FqqCouswVqwugaA9r4dNZB1wwcmrD02QkV5H0y7XBQW8QwQqEaZY1pM9aqORSORhJRdNK44Q=="],
 
