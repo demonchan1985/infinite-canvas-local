@@ -71,7 +71,7 @@ const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_PAYLOAD_BYTES = 28 * 1024 * 1024;
 const MESSAGE_PREVIEW_LONG_EDGE = 192;
 const MESSAGE_PREVIEW_MAX_LENGTH = 500_000;
-const DEFAULT_AGENT_URL = "http://127.0.0.1:17371";
+const DEFAULT_AGENT_URL = "http://127.0.0.1:17375";
 const AGENT_PROTOCOL_VERSION = 6;
 const HISTORY_RETRY_DELAYS_MS = [0, 150, 350, 700, 1200];
 const AGENT_REASONING_EFFORTS = new Set<AgentReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -134,7 +134,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     // canvasContext is intentionally excluded because project updates it every frame during dragging and resizing.
     // The panel uses it only for ref synchronization and debounced postState calls, never during rendering.
     // Subscribing here would rerender the panel every frame and amplify the #185 crash, so it is observed imperatively below.
-    const { width, url, token, connected, enabled, prompt, attachments, sending, waiting, tokenUsage, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, permissionMode, models, model, reasoningEffort, activity, conversation, connectError, pendingTool, pendingApprovals } = useAgentStore(
+    const { width, url, token, connected, enabled, prompt, autoSubmitPrompt, attachments, sending, waiting, tokenUsage, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, permissionMode, models, model, reasoningEffort, activity, conversation, connectError, pendingTool, pendingApprovals } = useAgentStore(
         useShallow((state) => ({
             width: state.width,
             url: state.url,
@@ -142,6 +142,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             connected: state.connected,
             enabled: state.enabled,
             prompt: state.prompt,
+            autoSubmitPrompt: state.autoSubmitPrompt,
             attachments: state.attachments,
             sending: state.sending,
             waiting: state.waiting,
@@ -752,6 +753,12 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         }
     };
 
+    useEffect(() => {
+        if (!autoSubmitPrompt || !connected || !conversationReady || sending || waiting || loadingThreads || !prompt.trim()) return;
+        setAgentState({ autoSubmitPrompt: false });
+        void sendPrompt();
+    }, [autoSubmitPrompt, connected, conversationReady, loadingThreads, prompt, sending, setAgentState, waiting]);
+
     const addAttachments = async (files: FileList | File[] | null) => {
         if (!files) return;
         const images = Array.from(files).filter((file) => file.type.startsWith("image/"));
@@ -984,6 +991,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         threadOperationRef.current = 0;
         setAgentState({
             messages: [],
+            autoSubmitPrompt: false,
             tokenUsage: null,
             threads: [],
             activeThreadId: "",

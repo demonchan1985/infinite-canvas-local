@@ -1,39 +1,52 @@
-import { App, Button, Checkbox, Input, Modal, Tabs } from "antd";
+import { App, Button, Checkbox, Input, Modal, Segmented, Tabs } from "antd";
 import { RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { fetchChannelModels } from "@/services/api/image";
-import type { ModelChannel } from "@/stores/use-config-store";
+import { createRunningHubStandardModel } from "@/lib/runninghub-model";
+import { fetchChannelModels, fetchRunningHubCatalog } from "@/services/api/image";
+import { guessCapability, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 // Channel model selector: fetch upstream models or add them manually, then include checked models in the channel list.
-export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onClose }: { open: boolean; channel: ModelChannel | null; selectedNames: string[]; onConfirm: (names: string[]) => void; onClose: () => void }) {
+export function ModelSelectModal({ open, channel, selectedModels, onConfirm, onClose }: { open: boolean; channel: ModelChannel | null; selectedModels: ChannelModel[]; onConfirm: (models: ChannelModel[]) => void; onClose: () => void }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
-    const [existing, setExisting] = useState<string[]>([]);
-    const [fetched, setFetched] = useState<string[]>([]);
+    const [existing, setExisting] = useState<ChannelModel[]>([]);
+    const [fetched, setFetched] = useState<ChannelModel[]>([]);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState("new");
+    const [capability, setCapability] = useState<ModelCapability | "all">("all");
     const [search, setSearch] = useState("");
     const [manual, setManual] = useState("");
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         if (!open) return;
-        setExisting(selectedNames);
+        setExisting(selectedModels);
         setFetched([]);
-        setSelected(new Set(selectedNames));
-        setActiveTab(selectedNames.length ? "existing" : "new");
+        setSelected(new Set(selectedModels.map((model) => model.name)));
+        setActiveTab(selectedModels.length ? "existing" : "new");
+        setCapability("all");
         setSearch("");
         setManual("");
-    }, [open, selectedNames]);
+    }, [open, selectedModels]);
 
     const currentList = activeTab === "new" ? fetched : existing;
+    const capabilityCounts = useMemo(() => {
+        const models = currentList;
+        return {
+            all: models.length,
+            text: models.filter((model) => model.capability === "text").length,
+            image: models.filter((model) => model.capability === "image").length,
+            video: models.filter((model) => model.capability === "video").length,
+            audio: models.filter((model) => model.capability === "audio").length,
+        };
+    }, [currentList]);
     const visibleList = useMemo(() => {
         const keyword = search.trim().toLowerCase();
-        return keyword ? currentList.filter((name) => name.toLowerCase().includes(keyword)) : currentList;
-    }, [currentList, search]);
-    const visibleSelectedCount = visibleList.filter((name) => selected.has(name)).length;
+        return currentList.filter((model) => (capability === "all" || model.capability === capability) && (!keyword || model.name.toLowerCase().includes(keyword)));
+    }, [capability, currentList, search]);
+    const visibleSelectedCount = visibleList.filter((model) => selected.has(model.name)).length;
 
     const toggle = (name: string, checked: boolean) =>
         setSelected((current) => {
@@ -46,14 +59,14 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
     const selectVisible = (checked: boolean) =>
         setSelected((current) => {
             const next = new Set(current);
-            visibleList.forEach((name) => (checked ? next.add(name) : next.delete(name)));
+            visibleList.forEach((model) => (checked ? next.add(model.name) : next.delete(model.name)));
             return next;
         });
 
     const addManual = () => {
         const name = manual.trim();
         if (!name) return;
-        if (!fetched.includes(name) && !existing.includes(name)) setFetched((current) => [name, ...current]);
+        if (!fetched.some((model) => model.name === name) && !existing.some((model) => model.name === name)) setFetched((current) => [{ name, capability: guessCapability(name) }, ...current]);
         setSelected((current) => new Set(current).add(name));
         setManual("");
         setActiveTab("new");
@@ -62,15 +75,22 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
     const fetchModels = async () => {
         if (!channel) return;
         if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
-            message.error(t("config.modelSelect.missingConfig"));
+            message.error(channel.apiFormat === "runninghub" ? "请先填写企业级-共享 API Key" : t("config.modelSelect.missingConfig"));
             return;
         }
         setLoading(true);
         try {
-            const models = await fetchChannelModels(channel);
-            setFetched(models);
+            let models: ChannelModel[];
+            if (channel.apiFormat === "runninghub") {
+                const [llmModels, catalog] = await Promise.all([fetchChannelModels(channel), fetchRunningHubCatalog(channel)]);
+                models = [...llmModels.map((name) => ({ name, capability: "text" as const })), ...catalog.map((item) => createRunningHubStandardModel(item.name, item.capability, item.target))];
+            } else {
+                models = (await fetchChannelModels(channel)).map((name) => ({ name, capability: guessCapability(name) }));
+            }
+            const uniqueModels = Array.from(new Map(models.map((model) => [model.name, model])).values());
+            setFetched(uniqueModels);
             setActiveTab("new");
-            message.success(t("config.modelSelect.fetched", { count: models.length }));
+            message.success(t("config.modelSelect.fetched", { count: uniqueModels.length }));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("config.modelSelect.fetchFailed"));
         } finally {
@@ -79,7 +99,7 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
     };
 
     const confirm = () => {
-        const ordered = [...existing, ...fetched].filter((name, index, list) => list.indexOf(name) === index).filter((name) => selected.has(name));
+        const ordered = Array.from(new Map([...existing, ...fetched].map((model) => [model.name, model])).values()).filter((model) => selected.has(model.name));
         onConfirm(ordered);
         onClose();
     };
@@ -110,7 +130,7 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
                 <Input className="min-w-[180px] flex-1" value={manual} onChange={(event) => setManual(event.target.value)} onPressEnter={addManual} placeholder={t("config.modelSelect.modelName")} />
                 <Button onClick={addManual}>{t("config.modelSelect.add")}</Button>
                 <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void fetchModels()}>
-                    {t("config.modelSelect.fetch")}
+                    {channel?.apiFormat === "runninghub" ? "拉取全部模型" : t("config.modelSelect.fetch")}
                 </Button>
             </div>
             <div className="mt-2 text-xs text-stone-500">{t("config.modelSelect.description")}</div>
@@ -124,6 +144,21 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
                     { key: "existing", label: t("config.modelSelect.existingTab", { count: existing.length }) },
                 ]}
             />
+
+            {channel?.apiFormat === "runninghub" ? (
+                <Segmented
+                    className="mb-3"
+                    value={capability}
+                    onChange={(value) => setCapability(value as ModelCapability | "all")}
+                    options={[
+                        { label: `全部 ${capabilityCounts.all}`, value: "all" },
+                        { label: `文本 ${capabilityCounts.text}`, value: "text" },
+                        { label: `生图 ${capabilityCounts.image}`, value: "image" },
+                        { label: `视频 ${capabilityCounts.video}`, value: "video" },
+                        { label: `音频 ${capabilityCounts.audio}`, value: "audio" },
+                    ]}
+                />
+            ) : null}
 
             <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="text-xs text-stone-500">{t("config.modelSelect.visibleSelected", { selected: visibleSelectedCount, total: visibleList.length })}</span>
@@ -139,10 +174,10 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
 
             {visibleList.length ? (
                 <div className="grid grid-cols-1 gap-x-8 gap-y-3 md:grid-cols-2">
-                    {visibleList.map((name) => (
-                        <Checkbox key={name} checked={selected.has(name)} onChange={(event) => toggle(name, event.target.checked)}>
-                            <span className="truncate" title={name}>
-                                {name}
+                    {visibleList.map((model) => (
+                        <Checkbox key={model.name} checked={selected.has(model.name)} onChange={(event) => toggle(model.name, event.target.checked)}>
+                            <span className="truncate" title={model.name}>
+                                {model.name}
                             </span>
                         </Checkbox>
                     ))}

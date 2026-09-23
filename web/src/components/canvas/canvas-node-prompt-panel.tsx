@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle, Maximize2, Square } from "lucide-react";
+import { ArrowUp, Image as ImageIcon, LoaderCircle, Maximize2, Square, Wand2 } from "lucide-react";
 import { Button, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -8,14 +8,15 @@ import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveC
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
-import { CanvasPromptLibrary } from "./canvas-prompt-library";
+import { CanvasCreativeTools } from "./canvas-creative-tools";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
+import { CanvasRunningHubWorkflowSettingsPopover, hasRunningHubWorkflowSettings } from "./canvas-runninghub-workflow-settings-popover";
 import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
 import { CanvasNodeType, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
-import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
+import { CanvasNodeReferenceAddButton, CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
@@ -73,36 +74,49 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
     return (
         <div
             data-canvas-no-zoom
-            className="rounded-2xl border p-3 shadow-2xl backdrop-blur"
+            data-canvas-creative-frame
+            className="rounded-[24px] border p-4 shadow-2xl backdrop-blur"
             style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} />
+            <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                    <span className="inline-flex h-10 items-center gap-2 rounded-xl px-4 text-base font-semibold" style={{ background: theme.toolbar.activeBg }}>
+                        {mode === "image" ? <ImageIcon className="size-4" /> : <Wand2 className="size-4" />}
+                        {t(`canvas.promptPanel.${mode === "image" ? "imageCreate" : mode}`)}
+                    </span>
+                    {(mode === "image" || mode === "video") ? <CanvasCreativeTools mode={mode} value={node.metadata?.creativePresets} disabled={isRunning} onChange={(creativePresets) => onConfigChange(node.id, { creativePresets })} /> : null}
+                </div>
+                <div className="flex items-center gap-2">
+                    {connectedNodes.length ? <span className="rounded-lg px-3 py-1.5 text-sm font-medium" style={{ background: theme.toolbar.activeBg, color: theme.toolbar.activeText }}>{t("canvas.promptPanel.references", { count: connectedNodes.length })}</span> : null}
+                    <CanvasNodeReferenceAddButton nodeId={node.id} onStartSelection={onStartReferenceSelection} />
+                </div>
+            </div>
+            <CanvasNodeReferenceBar nodeId={node.id} nodes={nodes} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} showAddButton={false} />
             <CanvasPromptChipInput
                 value={prompt}
                 references={mentionReferences}
                 onChange={updatePrompt}
                 onSubmit={submit}
-                className="thin-scrollbar h-40 w-full cursor-text resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
+                className="-mt-2 thin-scrollbar h-36 w-full cursor-text resize-none rounded-2xl px-4 py-2.5 text-base leading-6 outline-none"
                 style={{ background: "transparent", color: theme.node.text }}
                 placeholder={t(`canvas.promptPanel.${mode === "image" && hasImageContent ? "editImage" : mode === "text" && hasTextContent ? "editText" : mode}`)}
             />
 
-            <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
+            <div className="mt-3 flex min-w-0 items-center justify-between gap-3 border-t pt-3" style={{ borderColor: theme.toolbar.border }}>
+                <div className="flex min-w-0 items-center gap-3">
                     <Tooltip title={t("canvas.promptPanel.expandEditor")}>
-                        <Button type="text" className="!h-8 !w-8 !min-w-8 shrink-0 !rounded-full !bg-transparent !p-0" style={{ color: theme.node.text }} icon={<Maximize2 className="size-3.5" />} onClick={openExpandedEditor} aria-label={t("canvas.promptPanel.expandEditor")} />
+                        <Button type="text" className="!h-11 !w-11 !min-w-11 shrink-0 !rounded-full !bg-transparent !p-0" style={{ color: theme.node.text }} icon={<Maximize2 className="size-[18px]" />} onClick={openExpandedEditor} aria-label={t("canvas.promptPanel.expandEditor")} />
                     </Tooltip>
-                    <CanvasPromptLibrary onSelect={updatePrompt} />
                     {mode === "image" ? (
                         <>
-                            <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="image" onMissingConfig={() => openConfigDialog(true)} className="max-w-[190px]" />
+                            <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="image" onMissingConfig={() => openConfigDialog(true)} className="!h-12 max-w-[340px] !text-[16px]" />
                             <CanvasImageSettingsPopover
                                 config={config}
                                 placement="topLeft"
-                                buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3"
+                                buttonClassName="!h-12 !max-w-[420px] !justify-start !rounded-full !px-5 !text-[16px]"
                                 onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
                                 onMissingConfig={() => openConfigDialog(true)}
                                 onOpenChange={onImageSettingsOpenChange}
@@ -111,7 +125,11 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
                     ) : mode === "video" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="video" onMissingConfig={() => openConfigDialog(true)} className="max-w-[190px]" />
-                            <CanvasVideoSettingsPopover config={config} buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
+                            {hasRunningHubWorkflowSettings(config) ? (
+                                <CanvasRunningHubWorkflowSettingsPopover config={config} values={node.metadata?.runningHubWorkflowValues} placement="bottomLeft" buttonClassName="!h-10 !max-w-[190px] !justify-start !rounded-full !px-3" onChange={(runningHubWorkflowValues) => onConfigChange(node.id, { runningHubWorkflowValues })} />
+                            ) : (
+                                <CanvasVideoSettingsPopover config={config} buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
+                            )}
                         </>
                     ) : mode === "audio" ? (
                         <>
@@ -127,7 +145,7 @@ export function CanvasNodePromptPanel({ node, nodes, isRunning, onPromptChange, 
                 </div>
                 <Button
                     type="primary"
-                    className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
+                    className="!h-12 !min-w-24 shrink-0 !rounded-full !px-5"
                     danger={isRunning}
                     disabled={!isRunning && !prompt.trim()}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
@@ -173,12 +191,15 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         model: resolveModelForCapability(globalConfig, node.metadata?.model, mode),
         reasoningEffort: node.metadata?.reasoningEffort || globalConfig.reasoningEffort || defaultConfig.reasoningEffort,
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
+        imageResolution: node.metadata?.imageResolution || globalConfig.imageResolution || defaultConfig.imageResolution,
         size: node.metadata?.size || globalConfig.size || defaultConfig.size,
         background: node.metadata?.background ?? globalConfig.background ?? defaultConfig.background,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
+        videoMode: node.metadata?.videoMode || globalConfig.videoMode || defaultConfig.videoMode,
         videoGenerateAudio: node.metadata?.generateAudio || globalConfig.videoGenerateAudio || defaultConfig.videoGenerateAudio,
         videoWatermark: node.metadata?.watermark || globalConfig.videoWatermark || defaultConfig.videoWatermark,
+        runningHubWorkflowValues: node.metadata?.runningHubWorkflowValues,
         audioVoice: node.metadata?.audioVoice || globalConfig.audioVoice || defaultConfig.audioVoice,
         audioFormat: node.metadata?.audioFormat || globalConfig.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node.metadata?.audioSpeed || globalConfig.audioSpeed || defaultConfig.audioSpeed,

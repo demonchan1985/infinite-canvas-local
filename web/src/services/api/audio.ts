@@ -3,10 +3,11 @@ import axios from "axios";
 import i18n from "@/i18n";
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type RunningHubNodeBinding } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
+import type { RunningHubWorkflowRunOptions } from "@/types/canvas";
 
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; runningHubWorkflowBindings?: { image: RunningHubNodeBinding[]; video: RunningHubNodeBinding[]; audio: RunningHubNodeBinding[] }; runningHubWorkflowRunOptions?: RunningHubWorkflowRunOptions };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -35,7 +36,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 script,
                 config: requestConfig,
                 prompt,
-                params: { voice: normalizeAudioVoiceValue(config.audioVoice), format, speed: normalizeAudioSpeedValue(config.audioSpeed), instructions: config.audioInstructions.trim() },
+                params: { voice: normalizeAudioVoiceValue(config.audioVoice), format, speed: normalizeAudioSpeedValue(config.audioSpeed), instructions: config.audioInstructions.trim(), workflowValues: config.runningHubWorkflowValues || {}, runningHubWorkflowBindings: options?.runningHubWorkflowBindings, runningHubWorkflowRunOptions: options?.runningHubWorkflowRunOptions },
                 signal: options?.signal,
             });
             return await audioPluginBlob(result, format);

@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
-import { ImageIcon, List, Music2, Settings2, Video, X } from "lucide-react";
+import { ImageIcon, List, Music2, PenLine, Sparkles, Video, WandSparkles, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { canvasCardVisualScale } from "@/lib/canvas/canvas-node-size";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { CanvasNodeType, type ConnectionHandle, type Position } from "@/types/canvas";
@@ -12,61 +13,80 @@ export type PendingConnectionCreate = {
     position: Position;
 };
 
+export type ConnectionCreateRequest = {
+    type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio;
+    initialPrompt?: string;
+    title?: string;
+    storyboardMode?: boolean;
+};
+
 export function ConnectionCreateMenu({
     pending,
+    scale,
     onCreate,
     onClose,
 }: {
     pending: PendingConnectionCreate;
-    onCreate: (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio) => void;
+    scale: number;
+    onCreate: (request: ConnectionCreateRequest) => void;
     onClose: () => void;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
+    const visualScale = canvasCardVisualScale(scale);
     return (
         <div
-            className="absolute z-[120] w-[300px] rounded-[18px] border p-3 shadow-2xl backdrop-blur"
+            className="absolute z-[120] w-[400px] overflow-hidden rounded-[18px] border p-2 shadow-2xl backdrop-blur"
             data-connection-create-menu
-            style={{ left: pending.position.x, top: pending.position.y, background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+            data-canvas-no-zoom
+            style={{ left: pending.position.x, top: pending.position.y, transform: `scale(${visualScale})`, transformOrigin: "top left", background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
         >
-            <div className="mb-2 flex items-center justify-between px-1">
-                <span className="text-sm font-medium" style={{ color: theme.node.muted }}>
-                    {t("canvas.createMenu.fromNode")}
-                </span>
+            <div className="mb-2 flex items-center justify-between border-b px-2 pb-2" style={{ borderColor: theme.node.stroke }}>
+                <div>
+                    <div className="flex items-center gap-3">
+                        <span className="grid size-12 place-items-center rounded-xl border" style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.muted }}><WandSparkles className="size-6" /></span>
+                        <div>
+                            <div className="text-xl font-semibold">{t("canvas.createMenu.createNext")}</div>
+                            <div className="mt-2 text-lg" style={{ color: theme.node.muted }}>{t("canvas.createMenu.fromNode")}</div>
+                        </div>
+                    </div>
+                </div>
                 <button type="button" className="grid size-7 place-items-center rounded-lg text-base opacity-55 transition hover:bg-white/10 hover:opacity-100" onClick={onClose} aria-label={t("canvas.createMenu.close")}>
                     ×
                 </button>
             </div>
-            <div className="grid gap-1">
-                <ConnectionCreateOption theme={theme} icon={<List className="size-5" />} title={t("canvas.createMenu.text")} description={t("canvas.createMenu.textDescription")} onClick={() => onCreate(CanvasNodeType.Text)} />
-                <ConnectionCreateOption theme={theme} icon={<ImageIcon className="size-5" />} title={t("canvas.createMenu.image")} onClick={() => onCreate(CanvasNodeType.Image)} />
-                <ConnectionCreateOption theme={theme} icon={<Video className="size-5" />} title={t("canvas.createMenu.video")} onClick={() => onCreate(CanvasNodeType.Video)} />
-                <ConnectionCreateOption theme={theme} icon={<Music2 className="size-5" />} title={t("canvas.createMenu.audio")} onClick={() => onCreate(CanvasNodeType.Audio)} />
-                <ConnectionCreateOption theme={theme} icon={<Settings2 className="size-5" />} title={t("canvas.createMenu.config")} description={t("canvas.createMenu.configDescription")} onClick={() => onCreate(CanvasNodeType.Config)} />
+            <div className="grid">
+                <ConnectionCreateOption showDivider theme={theme} icon={<List className="size-6" />} title={t("canvas.createMenu.text")} description={t("canvas.createMenu.textDescription")} onClick={() => onCreate({ type: CanvasNodeType.Text })} />
+                <ConnectionCreateOption showDivider theme={theme} icon={<ImageIcon className="size-6" />} title={t("canvas.createMenu.image")} onClick={() => onCreate({ type: CanvasNodeType.Image })} />
+                <ConnectionCreateOption showDivider theme={theme} icon={<Video className="size-6" />} title={t("canvas.createMenu.video")} onClick={() => onCreate({ type: CanvasNodeType.Video })} />
+                <ConnectionCreateOption showDivider theme={theme} icon={<Sparkles className="size-6" />} title={t("canvas.createMenu.storyboard")} description={t("canvas.createMenu.storyboardDescription")} onClick={() => onCreate({ type: CanvasNodeType.Text, title: t("canvas.createMenu.storyboard"), initialPrompt: t("canvas.createMenu.storyboardPrompt"), storyboardMode: true })} />
+                <ConnectionCreateOption showDivider theme={theme} icon={<PenLine className="size-6" />} title={t("canvas.createMenu.drawing")} description={t("canvas.createMenu.drawingDescription")} onClick={() => onCreate({ type: CanvasNodeType.Image })} />
+                <ConnectionCreateOption showDivider theme={theme} icon={<Music2 className="size-6" />} title={t("canvas.createMenu.audio")} onClick={() => onCreate({ type: CanvasNodeType.Audio })} />
+                <ConnectionCreateOption theme={theme} icon={<WandSparkles className="size-6" />} title={t("canvas.createMenu.config")} description={t("canvas.createMenu.configDescription")} onClick={() => onCreate({ type: CanvasNodeType.Config })} />
             </div>
         </div>
     );
 }
 
-export function ConnectionCreateOption({ theme, icon, title, description, onClick }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes]; icon: React.ReactNode; title: string; description?: string; onClick?: () => void }) {
+export function ConnectionCreateOption({ theme, icon, title, description, showDivider = false, compact = false, onClick }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes]; icon: React.ReactNode; title: string; description?: string; showDivider?: boolean; compact?: boolean; onClick?: () => void }) {
     return (
         <button
             type="button"
-            className="flex h-16 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition"
-            style={{ color: theme.node.text }}
+            className={`flex w-full min-w-0 cursor-pointer overflow-hidden rounded-none text-left transition ${compact ? "gap-2 px-1.5" : "gap-3 px-2"} ${compact ? (description ? "min-h-[60px] items-start py-2" : "h-14 items-center") : (description ? "h-[88px] items-start py-3" : "h-20 items-center")} ${showDivider ? "border-b" : ""}`}
+            style={{ color: theme.node.text, borderColor: showDivider ? theme.node.stroke : undefined }}
             onClick={onClick}
             onMouseEnter={(event) => (event.currentTarget.style.background = theme.node.fill)}
             onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
         >
-            <span className="grid size-11 shrink-0 place-items-center rounded-xl" style={{ background: theme.node.fill, color: theme.node.muted }}>
+            <span className={`grid shrink-0 place-items-center border ${compact ? "size-8 rounded-lg [&_svg]:size-4" : "size-12 rounded-xl"}`} style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.muted }}>
                 {icon}
             </span>
-            <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2 text-base font-semibold leading-5">{title}</span>
+            <span className="min-w-0 flex-1 overflow-hidden">
+                <span className={`flex items-center gap-2 truncate ${compact ? "text-base font-medium leading-5" : "text-xl font-semibold leading-7"}`}>{title}</span>
                 {description ? (
-                    <span className="mt-1 block truncate text-sm" style={{ color: theme.node.muted }}>
+                        <span className={`block truncate ${compact ? "mt-1 text-xs leading-4" : "mt-2 text-lg leading-6"}`} style={{ color: theme.node.muted }}>
                         {description}
                     </span>
                 ) : null}
@@ -75,12 +95,13 @@ export function ConnectionCreateOption({ theme, icon, title, description, onClic
     );
 }
 
-export function NodeCreateMenu({ position, onCreate, onClose }: { position: Position; onCreate: (type: string) => void; onClose: () => void }) {
+export function NodeCreateMenu({ position, scale, onCreate, onClose }: { position: Position; scale: number; onCreate: (type: string) => void; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
     useNodeRegistryVersion();
     const menuRef = useRef<HTMLDivElement>(null);
     const definitions = listNodeDefinitions().filter((def) => def.showInCreateMenu !== false);
+    const visualScale = canvasCardVisualScale(scale);
     // Close automatically when clicking outside the menu.
     useEffect(() => {
         const handlePointerDown = (event: PointerEvent) => {
@@ -92,22 +113,22 @@ export function NodeCreateMenu({ position, onCreate, onClose }: { position: Posi
     return (
         <div
             ref={menuRef}
-            className="absolute z-[120] max-h-[70vh] w-[300px] overflow-y-auto rounded-[18px] border p-3 shadow-2xl backdrop-blur thin-scrollbar"
+            className="absolute z-[120] max-h-[70vh] w-[272px] overflow-y-auto rounded-[14px] border p-2 shadow-2xl backdrop-blur thin-scrollbar"
             data-canvas-no-zoom
-            style={{ left: position.x, top: position.y, background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+            style={{ left: position.x, top: position.y, transform: `scale(${visualScale})`, transformOrigin: "top left", background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
             onPointerDown={(event) => event.stopPropagation()}
         >
-            <div className="mb-2 flex items-center justify-between px-1">
+            <div className="mb-1 flex items-center justify-between px-1">
                 <span className="text-sm font-medium" style={{ color: theme.node.muted }}>
                     {t("canvas.createMenu.select")}
                 </span>
-                <button type="button" className="grid size-7 place-items-center rounded-lg opacity-55 transition hover:opacity-100" onClick={onClose} aria-label={t("canvas.createMenu.close")}>
+                <button type="button" className="grid size-6 place-items-center rounded-md opacity-55 transition hover:opacity-100" onClick={onClose} aria-label={t("canvas.createMenu.close")}>
                     <X className="size-4" />
                 </button>
             </div>
-            <div className="grid gap-1">
-                {definitions.map((def) => (
-                    <ConnectionCreateOption key={def.type} theme={theme} icon={def.icon} title={def.title} description={def.description} onClick={() => onCreate(def.type)} />
+            <div className="grid gap-0">
+                {definitions.map((def, index) => (
+                    <ConnectionCreateOption key={def.type} compact showDivider={index < definitions.length - 1} theme={theme} icon={def.icon} title={def.title} description={def.description} onClick={() => onCreate(def.type)} />
                 ))}
             </div>
         </div>

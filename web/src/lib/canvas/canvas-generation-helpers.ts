@@ -1,6 +1,6 @@
 import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
 import i18n from "@/i18n";
-import { resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
 import type { NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
@@ -45,26 +45,43 @@ export async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
 export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
     return Promise.all(
         nodes.map(async (node) => {
-            const metadata = node.metadata;
-            const content = metadata?.content;
-            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && metadata?.storageKey) return { ...node, metadata: { ...metadata, content: await resolveMediaUrl(metadata.storageKey, content) } };
-            if (node.type !== CanvasNodeType.Image || !metadata || !content) return node;
-            const images = await Promise.all((metadata.images || []).map(async (image) => (image.content ? { ...image, content: await resolveImageUrl(image.storageKey, image.content) } : image)));
-            if (metadata.storageKey) return { ...node, metadata: { ...metadata, content: await resolveImageUrl(metadata.storageKey, content), images } };
-            if (!content.startsWith("data:image/")) return node;
-            return { ...node, metadata: { ...metadata, ...imageMetadata(await uploadImage(content)) } };
+            try {
+                const metadata = node.metadata;
+                const content = metadata?.content;
+                if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && metadata?.storageKey) return { ...node, metadata: { ...metadata, content: await resolveMediaUrl(metadata.storageKey, content) } };
+                if (node.type !== CanvasNodeType.Image || !metadata || !content) return node;
+                const images = await Promise.all(
+                    (metadata.images || []).map(async (image) => {
+                        if (!image.content) return image;
+                        void ensureImagePreview(image.storageKey);
+                        return { ...image, content: await resolveImageUrl(image.storageKey, image.content) };
+                    }),
+                );
+                if (metadata.storageKey) {
+                    void ensureImagePreview(metadata.storageKey);
+                    return { ...node, metadata: { ...metadata, content: await resolveImageUrl(metadata.storageKey, content), images } };
+                }
+                if (!content.startsWith("data:image/")) return node;
+                return { ...node, metadata: { ...metadata, ...imageMetadata(await uploadImage(content)) } };
+            } catch {
+                return node;
+            }
         }),
     );
 }
 
 export async function hydrateAssistantImages(sessions: CanvasAssistantSession[]) {
     const hydrateItem = async <T extends { dataUrl?: string; storageKey?: string }>(item: T) => {
-        if (item.storageKey) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
-        if (item.dataUrl?.startsWith("data:image/")) {
-            const image = await uploadImage(item.dataUrl);
-            return { ...item, dataUrl: image.url, storageKey: image.storageKey };
+        try {
+            if (item.storageKey) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
+            if (item.dataUrl?.startsWith("data:image/")) {
+                const image = await uploadImage(item.dataUrl);
+                return { ...item, dataUrl: image.url, storageKey: image.storageKey };
+            }
+            return item;
+        } catch {
+            return item;
         }
-        return item;
     };
     return Promise.all(
         sessions.map(async (session) => ({
@@ -99,12 +116,15 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
         model: resolveModelForCapability(config, node?.metadata?.model, mode),
         reasoningEffort: node?.metadata?.reasoningEffort || config.reasoningEffort || defaultConfig.reasoningEffort,
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
+        imageResolution: node?.metadata?.imageResolution || config.imageResolution || defaultConfig.imageResolution,
         size: node?.metadata?.size || config.size || defaultConfig.size,
         background: node?.metadata?.background ?? config.background ?? defaultConfig.background,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
+        videoMode: node?.metadata?.videoMode || config.videoMode || defaultConfig.videoMode,
         videoGenerateAudio: node?.metadata?.generateAudio || config.videoGenerateAudio || defaultConfig.videoGenerateAudio,
         videoWatermark: node?.metadata?.watermark || config.videoWatermark || defaultConfig.videoWatermark,
+        runningHubWorkflowValues: node?.metadata?.runningHubWorkflowValues,
         audioVoice: node?.metadata?.audioVoice || config.audioVoice || defaultConfig.audioVoice,
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
@@ -113,10 +133,16 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     };
 }
 
+export function hasResumableVideoTask(node: CanvasNodeData) {
+    return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
+}
+
 export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
     return nodes.map((node) =>
         node.metadata?.status === "loading"
-            ? {
+            ? hasResumableVideoTask(node)
+                ? node
+                : {
                   ...node,
                   metadata: {
                       ...node.metadata,

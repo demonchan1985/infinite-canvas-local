@@ -35,11 +35,14 @@ export type AgentSkillDetail = {
     revision: string;
 };
 export type AgentSkillInput = { name?: string; description: string; instructions: string; interface?: AgentSkillInterface | null; expectedRevision?: string };
+export type AgentSkillImportInput = { source: "markdown" | "zip" | "github"; fileName?: string; contentBase64?: string; url?: string };
 export type AgentSkillDraft = { name: string; displayName: string; description: string; instructions: string; shortDescription: string; defaultPrompt: string };
+export type AgentSkillContent = { path: string; content: string };
 export type AgentSkillDraftInput = { source: "conversation" | "canvas"; threadId: string; clientId: string; model?: string; effort?: AgentReasoningEffort };
 export type AgentSkillsResponse = { ok?: boolean; data?: AgentSkillSummary[]; errors?: unknown[] };
 export type AgentSkillResponse = { ok?: boolean; data?: AgentSkillDetail };
 export type AgentSkillDraftResponse = { ok?: boolean; data?: AgentSkillDraft };
+export type AgentSkillContentResponse = { ok?: boolean; data?: AgentSkillContent };
 
 export async function postState(endpoint: string, token: string, clientId: string, snapshot: CanvasAgentSnapshot | null) {
     try {
@@ -95,8 +98,16 @@ export function fetchCodexSkill(endpoint: string, token: string, name: string) {
     return fetchAgentJson<AgentSkillResponse>(endpoint, token, `/agent/codex/skills/${encodeURIComponent(name)}`);
 }
 
+export function fetchCodexSkillContent(endpoint: string, token: string, skillPath: string) {
+    return fetchAgentJson<AgentSkillContentResponse>(endpoint, token, `/agent/codex/skills/content?path=${encodeURIComponent(skillPath)}`);
+}
+
 export function createCodexSkill(endpoint: string, token: string, input: AgentSkillInput) {
     return fetchAgentJson<AgentSkillResponse>(endpoint, token, "/agent/codex/skills", jsonPost(input));
+}
+
+export function importCodexSkill(endpoint: string, token: string, input: AgentSkillImportInput) {
+    return fetchAgentJson<AgentSkillResponse>(endpoint, token, "/agent/codex/skills/import", jsonPost(input));
 }
 
 export function createCodexSkillDraft(endpoint: string, token: string, input: AgentSkillDraftInput) {

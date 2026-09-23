@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
 import { AppConfigModal } from "@/components/layout/app-config-modal";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
+import { RunningHubAccountBalance } from "@/components/layout/runninghub-account-balance";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { cn } from "@/lib/utils";
 import { useEffect, useRef, useState } from "react";
@@ -40,7 +41,7 @@ export function AppTopNav() {
                         <div className="flex min-w-0 items-center">
                             <Link to="/" className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
                                 <span
-                                    className="size-5 shrink-0 bg-current"
+                                    className="size-7 shrink-0 bg-current"
                                     style={{
                                         mask: "url(/logo.svg) center / contain no-repeat",
                                         WebkitMask: "url(/logo.svg) center / contain no-repeat",
@@ -87,6 +88,7 @@ export function AppTopNav() {
                                 <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bot className="size-4" />} onClick={togglePanel} aria-label={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")} />
                             </Tooltip>
                             <UserStatusActions />
+                            <RunningHubAccountBalance />
                         </div>
                     </div>
                 </header>

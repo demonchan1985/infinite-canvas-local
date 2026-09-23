@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import matter from "gray-matter";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -13,6 +16,8 @@ const MAX_DISPLAY_NAME_LENGTH = 64;
 const MIN_SHORT_DESCRIPTION_LENGTH = 25;
 const MAX_SHORT_DESCRIPTION_LENGTH = 64;
 const MAX_DEFAULT_PROMPT_LENGTH = 1024;
+const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 export type ManagedSkillInterface = {
     displayName?: string;
@@ -42,6 +47,13 @@ export type UpdateManagedSkillInput = {
     instructions: string;
     interface?: ManagedSkillInterface | null;
     expectedRevision: string;
+};
+
+export type ImportManagedSkillInput = {
+    source: "markdown" | "zip" | "github";
+    fileName?: string;
+    contentBase64?: string;
+    url?: string;
 };
 
 type SkillDocument = {
@@ -116,6 +128,31 @@ export class SkillStore {
                 throw error;
             }
         });
+    }
+
+    /** 导入单个 SKILL.md、包含 SKILL.md 的 ZIP，或 GitHub 上的 SKILL.md。 */
+    async import(input: ImportManagedSkillInput) {
+        const source = input?.source;
+        let raw = "";
+        let fileName = input?.fileName || "SKILL.md";
+        if (source === "markdown") raw = decodeImportContent(input.contentBase64);
+        else if (source === "zip") {
+            const archive = decodeImportBuffer(input.contentBase64);
+            raw = await skillMarkdownFromZip(archive);
+            fileName = "SKILL.md";
+        }
+        else if (source === "github") {
+            const remote = githubRawUrl(input.url);
+            const response = await fetch(remote, { signal: AbortSignal.timeout(12_000), headers: { accept: "text/plain" } });
+            if (!response.ok) throw new SkillStoreError(`无法读取 GitHub Skill（${response.status}）`, 400);
+            raw = await response.text();
+            if (Buffer.byteLength(raw, "utf8") > MAX_IMPORT_BYTES) throw new SkillStoreError("GitHub Skill 文件不能超过 2MiB", 400);
+            fileName = path.basename(new URL(remote).pathname) || "SKILL.md";
+        }
+        else throw new SkillStoreError("Skill 导入来源无效", 400);
+
+        const parsed = importedSkill(raw, fileName);
+        return this.create(parsed);
     }
 
     /** 通过 revision 防止覆盖已被其他窗口或外部编辑器修改的内容。 */
@@ -269,6 +306,70 @@ function skillName(value: unknown) {
     const name = typeof value === "string" ? value : "";
     if (!validName(name)) throw new SkillStoreError("Skill 名称只能包含小写字母、数字和连字符", 400);
     return name;
+}
+
+function importedSkill(raw: string, fileName: string): CreateManagedSkillInput {
+    let parsed: matter.GrayMatterFile<string>;
+    try {
+        parsed = matter(raw);
+    } catch {
+        throw new SkillStoreError("导入文件的 frontmatter 格式无效", 400);
+    }
+    const frontmatter = recordValue(parsed.data);
+    const fallbackName = path.basename(fileName, path.extname(fileName)).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const name = skillName(typeof frontmatter.name === "string" && frontmatter.name.trim() ? frontmatter.name.trim() : fallbackName);
+    const description = skillDescription(frontmatter.description);
+    const instructions = skillInstructions(parsed.content);
+    return { name, description, instructions };
+}
+
+function decodeImportBuffer(value: unknown) {
+    if (typeof value !== "string" || !value) throw new SkillStoreError("请选择要导入的文件", 400);
+    const content = value.replace(/^data:[^,]+,/, "");
+    const buffer = Buffer.from(content, "base64");
+    if (!buffer.length || buffer.length > MAX_IMPORT_BYTES) throw new SkillStoreError("导入文件必须在 2MiB 以内", 400);
+    return buffer;
+}
+
+function decodeImportContent(value: unknown) {
+    return decodeImportBuffer(value).toString("utf8");
+}
+
+async function skillMarkdownFromZip(archive: Buffer) {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-skill-import-"));
+    const archivePath = path.join(tempDir, "skill.zip");
+    try {
+        await fs.writeFile(archivePath, archive, { flag: "wx" });
+        const { stdout } = await execFileAsync("/usr/bin/unzip", ["-Z1", archivePath], { maxBuffer: 256 * 1024, timeout: 8_000 });
+        const entries = stdout.split(/\r?\n/).filter((entry) => /(?:^|\/)SKILL\.md$/i.test(entry) && !entry.includes(".."));
+        if (!entries.length) throw new SkillStoreError("ZIP 中找不到 SKILL.md", 400);
+        const entry = entries.sort((a, b) => a.length - b.length)[0];
+        const result = await execFileAsync("/usr/bin/unzip", ["-p", archivePath, entry], { encoding: "buffer", maxBuffer: MAX_IMPORT_BYTES, timeout: 8_000 });
+        const content = Buffer.from(result.stdout);
+        if (!content.length || content.length > MAX_IMPORT_BYTES) throw new SkillStoreError("ZIP 中的 SKILL.md 必须在 2MiB 以内", 400);
+        return content.toString("utf8");
+    } catch (error) {
+        if (error instanceof SkillStoreError) throw error;
+        throw new SkillStoreError("无法读取 ZIP 文件", 400);
+    } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+    }
+}
+
+function githubRawUrl(value: unknown) {
+    if (typeof value !== "string" || !value.trim()) throw new SkillStoreError("请输入 GitHub SKILL.md 链接", 400);
+    let url: URL;
+    try {
+        url = new URL(value.trim());
+    } catch {
+        throw new SkillStoreError("GitHub 链接格式无效", 400);
+    }
+    if (url.hostname === "raw.githubusercontent.com" && /\/SKILL\.md$/i.test(url.pathname)) return url.toString();
+    if (url.hostname !== "github.com") throw new SkillStoreError("仅支持 GitHub 或 raw.githubusercontent.com 链接", 400);
+    const segments = url.pathname.split("/").filter(Boolean);
+    const marker = segments[2] === "blob" || segments[2] === "raw" ? 2 : -1;
+    if (marker < 0 || segments.length < 5 || !/SKILL\.md$/i.test(segments.at(-1) || "")) throw new SkillStoreError("请粘贴 GitHub 中 SKILL.md 的文件链接", 400);
+    return `https://raw.githubusercontent.com/${segments[0]}/${segments[1]}/${segments.slice(3).map(encodeURIComponent).join("/")}`;
 }
 
 function skillDescription(value: unknown) {

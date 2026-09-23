@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
-import { Brush, Camera, Copy, FileText, Grid2x2, Lock, LockOpen, Maximize2, Scissors, Sparkles, Upload, ZoomIn } from "lucide-react";
+import { Brush, Camera, Copy, FileText, Grid2x2, Lock, LockOpen, Maximize2, ScanFace, Scissors, Sparkles, Upload, ZoomIn } from "lucide-react";
 
 import type { CanvasNodeData } from "@/types/canvas";
 import i18n from "@/i18n";
 
-export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "upscale" | "superResolve" | "angle" | "view";
+export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "upscale" | "superResolve" | "personAdjust" | "angle" | "view";
 export type ImageQuickToolId = "info" | "delete" | "saveAsset" | "download" | ImageNodeActionToolId;
 
 export type ImageToolHandlers = {
@@ -16,6 +16,7 @@ export type ImageToolHandlers = {
     onUpscale: (node: CanvasNodeData) => void;
     onSuperResolve: (node: CanvasNodeData) => void;
     onAngle: (node: CanvasNodeData) => void;
+    onPersonAdjust: (node: CanvasNodeData, mode?: "emotion" | "texture") => void;
     onViewImage: (node: CanvasNodeData) => void;
     onCopyPrompt: (node: CanvasNodeData) => void;
     onReversePrompt: (node: CanvasNodeData) => void;
@@ -36,7 +37,7 @@ export type ImageQuickToolsConfig = {
     showLabels: boolean;
 };
 
-export const IMAGE_QUICK_TOOLS_STORAGE_KEY = "canvas-image-quick-tools-v7";
+export const IMAGE_QUICK_TOOLS_STORAGE_KEY = "canvas-image-quick-tools-v9";
 
 const defaultBaseToolIds: ImageQuickToolId[] = ["info", "delete", "saveAsset", "download"];
 
@@ -108,15 +109,23 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
     },
     {
         id: "superResolve",
-        defaultVisible: false,
+        defaultVisible: true,
         label: () => i18n.t("canvas.imageTools.superResolve"),
         title: () => i18n.t("canvas.imageTools.superResolveTitle"),
         icon: () => <Sparkles className="size-4" />,
         run: (node, handlers) => handlers.onSuperResolve(node),
     },
     {
+        id: "personAdjust",
+        defaultVisible: true,
+        label: () => i18n.t("canvas.imageTools.personAdjust"),
+        title: () => i18n.t("canvas.imageTools.personAdjustTitle"),
+        icon: () => <ScanFace className="size-4" />,
+        run: (node, handlers) => handlers.onPersonAdjust(node),
+    },
+    {
         id: "angle",
-        defaultVisible: false,
+        defaultVisible: true,
         label: () => i18n.t("canvas.imageTools.angle"),
         title: () => i18n.t("canvas.imageTools.angleTitle"),
         icon: () => <Camera className="size-4" />,

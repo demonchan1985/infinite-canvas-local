@@ -1,38 +1,45 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Group, Video } from "lucide-react";
+import { Group, Minus, Plus, Scan, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
-import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
+import { defaultConfig, decodeChannelModel, encodeChannelModel, findChannelModel, modelOptionsFromChannels, useConfigStore, useEffectiveConfig, type AiConfig, type ChannelModel } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
-import { uploadMediaFile } from "@/services/file-storage";
+import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
-import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
+import { canvasSurfacePalette, canvasThemes, type CanvasBackgroundMode, type CanvasBackgroundTone } from "@/lib/canvas-theme";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
-import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
+import { fitImageNodeSize, fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { captureVideoFrame, type VideoFramePosition } from "@/lib/canvas/canvas-video-frame";
 import { App, Button, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
 import { CanvasConfigNodePanel } from "@/components/canvas/canvas-config-node-panel";
+import { RUNNING_HUB_WORKFLOW_NODE_WIDTH, runningHubWorkflowCardHeight } from "@/components/canvas/canvas-runninghub-workflow-node";
+import { CanvasRunningHubWorkflowSelect } from "@/components/canvas/canvas-runninghub-workflow-settings-popover";
+import { RUNNING_HUB_WORKFLOW_PORT_X, migrateUnambiguousRunningHubLegacyConnections, runningHubWorkflowAutoPort, runningHubWorkflowContentScale, runningHubWorkflowPortHeads, runningHubWorkflowPortIdentity, runningHubWorkflowPortY } from "@/components/canvas/canvas-runninghub-workflow-ports";
+import { RUNNING_HUB_WORKFLOW_INSTANCE_TYPES, runningHubWorkflowInstanceLabel, type RunningHubWorkflowInstanceType } from "@/components/canvas/runninghub-workflow-settings";
+import { CanvasWorkflowLibraryModal, type CanvasWorkflowLibraryItem } from "@/components/canvas/canvas-workflow-library-modal";
 import { CanvasNodeContextMenu } from "@/components/canvas/canvas-context-menu";
 import { CanvasNodeAngleDialog, type CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
+import { CanvasNodePersonAdjustDialog, type CanvasImagePersonAdjustParams } from "@/components/canvas/canvas-node-person-adjust-dialog";
 import { CanvasNodeCropDialog, type CanvasImageCropRect } from "@/components/canvas/canvas-node-crop-dialog";
 import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "@/components/canvas/canvas-node-mask-edit-dialog";
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "@/components/canvas/canvas-node-split-dialog";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "@/components/canvas/canvas-node-upscale-dialog";
-import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
+import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, buildRunningHubWorkflowGenerationContext, hydrateNodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "@/components/canvas/canvas-node-hover-toolbar";
+import { CanvasSelectionToolbar } from "@/components/canvas/canvas-selection-toolbar";
 import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
 import { Minimap } from "@/components/canvas/canvas-mini-map";
 import { CanvasNode } from "@/components/canvas/canvas-node";
@@ -41,22 +48,39 @@ import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
+import { CanvasNodeSearch } from "@/components/canvas/canvas-node-search";
+import { arrangeAllGroupImageNodes, arrangeCanvasNodes, fitCanvasViewport } from "@/lib/canvas/canvas-layout";
+import { useCanvasWorkspaceStore } from "@/stores/canvas/use-canvas-workspace-store";
 import { useAgentStore } from "@/stores/use-agent-store";
+import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
-import { findContainingGroupId, findGroupDropTarget, getConnectionTargetAnchor, normalizeConnection, snapNodesIntoGroup } from "@/lib/canvas/canvas-node-geometry";
+import {
+    applyGroupSelection,
+    applyUngroupSelection,
+    canGroupSelectedNodes,
+    canUngroupSelectedNodes,
+    connectionIntersectsViewBounds,
+    collectGroupMemberNodes,
+    findContainingGroupId,
+    findGroupDropTarget,
+    getConnectionTargetAnchor,
+    getGroupWrapRect,
+    normalizeConnection,
+    snapNodesIntoGroup,
+} from "@/lib/canvas/canvas-node-geometry";
 import {
     audioExtension,
-    buildAngleLabel,
     buildAnglePrompt,
     buildGenerationConfig,
     findRetrySourceNode,
     generationReferenceUrls,
     getGenerationCount,
+    hasResumableVideoTask,
     getInputSummary,
     hydrateAssistantImages,
     hydrateCanvasImages,
@@ -72,7 +96,12 @@ import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasPluginManagerModal } from "@/components/canvas/canvas-plugin-manager-modal";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
-import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
+import { RunningHubWorkflowImportModal } from "@/components/layout/runninghub-workflow-import-modal";
+import { ConnectionCreateMenu, NodeCreateMenu, type ConnectionCreateRequest, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
+import { canvasDroppedMediaFiles, normalizeCanvasDroppedFile } from "@/lib/canvas/canvas-drop-files";
+import { composeCanvasCreativePrompt } from "@/lib/canvas/canvas-creative-presets";
+import { mergeTextNodeImportedContent, normalizeCanvasTextTags } from "@/lib/canvas/canvas-text-node-import";
+import { findSeedVrUpscaleModel, RUNNING_HUB_SEEDVR_DEFAULT_PIXEL, RUNNING_HUB_SEEDVR_PIXEL_FIELD_KEY, seedVrUpscaleImageBindings, seedVrUpscalePixelField } from "@/lib/runninghub-model";
 import {
     CanvasNodeType,
     type CanvasAssistantImage,
@@ -81,7 +110,9 @@ import {
     type CanvasNodeData,
     type CanvasNodeImage,
     type CanvasNodeText,
+    type CanvasTextTag,
     type CanvasNodeMetadata,
+    type CanvasStoryboardRow,
     type CanvasNodeTypeId,
     type ConnectionHandle,
     type ContextMenuState,
@@ -102,6 +133,7 @@ type CanvasClipboard = {
 
 type ConnectionDropTarget = {
     nodeId: string | null;
+    portId?: string;
     isNearNode: boolean;
 };
 
@@ -109,6 +141,7 @@ type CanvasHistoryEntry = Pick<CanvasClipboard, "nodes" | "connections"> & {
     chatSessions: CanvasAssistantSession[];
     activeChatId: string | null;
     backgroundMode: CanvasBackgroundMode;
+    backgroundTone: CanvasBackgroundTone;
     showImageInfo: boolean;
 };
 
@@ -129,6 +162,99 @@ const NODE_STATUS_IDLE = "idle" as const;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
+const IMAGE_PREVIEW_MIN_ZOOM = 1;
+const IMAGE_PREVIEW_MAX_ZOOM = 4;
+const IMAGE_PREVIEW_ZOOM_STEP = 0.25;
+
+function generatedImageTitle(nodeId: string) {
+    return `canvas-image-${nodeId}`;
+}
+
+function applyGeneratedVideo(node: CanvasNodeData, video: UploadedFile, extra: CanvasNodeData["metadata"] = {}): CanvasNodeData {
+    const size = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+    return {
+        ...node,
+        width: size.width,
+        height: size.height,
+        position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 },
+        metadata: { ...node.metadata, ...videoMetadata(video), ...extra, videoTaskId: undefined, videoTaskProvider: undefined },
+    };
+}
+
+function mergeStoryboardRows(existing: CanvasStoryboardRow[], content: string): CanvasStoryboardRow[] {
+    const lines = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const parsed = lines.map((line, index) => {
+        const duration = line.match(/(?:时长|duration)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?/i)?.[1] || existing[index]?.duration || "6";
+        const cleaned = line.replace(/^\s*(?:镜头|shot)?\s*\d+\s*[.、:：)）-]?\s*/i, "");
+        return { id: existing[index]?.id || `shot-${nanoid()}`, duration, shotPrompt: cleaned.slice(0, 240), dialogue: "", asset: "未关联" } satisfies CanvasStoryboardRow;
+    });
+    return parsed.length ? parsed : existing;
+}
+
+function normalizeGeneratedImageScale(node: CanvasNodeData): CanvasNodeData {
+    const metadata = node.metadata;
+    if (node.type !== CanvasNodeType.Image || !metadata?.generationType || metadata.freeResize || metadata.imageDisplayScale === "standard-v2" || !metadata.naturalWidth || !metadata.naturalHeight) return node;
+    const size = fitImageNodeSize(metadata.naturalWidth, metadata.naturalHeight);
+    const centerX = node.position.x + node.width / 2;
+    const centerY = node.position.y + node.height / 2;
+    return {
+        ...node,
+        position: { x: centerX - size.width / 2, y: centerY - size.height / 2 },
+        ...size,
+        metadata: { ...metadata, imageDisplayScale: "standard-v2" as const },
+    };
+}
+
+function normalizeGeneratedImageTitle(node: CanvasNodeData): CanvasNodeData {
+    if (node.type !== CanvasNodeType.Image || !node.metadata?.generationType) return node;
+    const promptTitle = node.metadata.prompt?.trim().slice(0, 32);
+    const isPromptTitle = node.title === "Generated Image" || (Boolean(promptTitle) && node.title === promptTitle);
+    return isPromptTitle ? { ...node, title: generatedImageTitle(node.id) } : node;
+}
+
+function normalizeWorkflowNodeScale(node: CanvasNodeData, config?: AiConfig): CanvasNodeData {
+    const resource = config ? runningHubResourceForNode(config, node) : undefined;
+    if (resource) {
+        const workflowScale = runningHubWorkflowContentScale(node);
+        const width = RUNNING_HUB_WORKFLOW_NODE_WIDTH * workflowScale;
+        const height = runningHubWorkflowCardHeight(resource, Boolean(node.metadata?.runningHubWorkflowPortsOpen), node.metadata?.runningHubWorkflowVisibleFieldKeys) * workflowScale;
+        if (node.width === width && node.height === height) return node;
+        return { ...node, width, height, position: { x: node.position.x + node.width / 2 - width / 2, y: node.position.y + node.height / 2 - height / 2 } };
+    }
+    if (node.type === CanvasNodeType.Config && node.width === 760 && node.height > 800) {
+        const width = 560;
+        const height = 588;
+        return { ...node, width, height, position: { x: node.position.x + node.width / 2 - width / 2, y: node.position.y + node.height / 2 - height / 2 } };
+    }
+    if (node.type !== CanvasNodeType.Text && node.type !== CanvasNodeType.Config) return node;
+    const isLegacySize =
+        node.type === CanvasNodeType.Config
+            ? (node.width === 340 && node.height === 240) || (node.width === 480 && node.height === 320) || (node.width === 640 && node.height === 400) || (node.width === 760 && node.height === 480)
+            : (node.width === 340 && node.height === 240) || (node.width === 480 && node.height === 320) || (node.width === 640 && node.height === 400);
+    const metadata = node.type === CanvasNodeType.Text && (node.metadata?.fontSize === 14 || node.metadata?.fontSize === 18 || node.metadata?.fontSize === 22) ? { ...node.metadata, fontSize: 26 } : node.metadata;
+    if (!isLegacySize) return metadata === node.metadata ? node : { ...node, metadata };
+    const size = node.type === CanvasNodeType.Text ? NODE_DEFAULT_SIZE[CanvasNodeType.Text] : NODE_DEFAULT_SIZE[CanvasNodeType.Config];
+    return {
+        ...node,
+        width: size.width,
+        height: size.height,
+        position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 },
+        metadata,
+    };
+}
+
+function runningHubResourceForNode(config: AiConfig, node: CanvasNodeData) {
+    if (node.type !== CanvasNodeType.Config) return undefined;
+    const resource = findChannelModel(config, node.metadata?.model || config.model)?.model.runningHub;
+    return resource && ["workflow", "app"].includes(resource.kind) ? resource : undefined;
+}
+
+function sameRunningHubWorkflowPort(first?: string, second?: string) {
+    return Boolean(first && second && runningHubWorkflowPortIdentity(first) === runningHubWorkflowPortIdentity(second));
+}
 export default function CanvasPage() {
     const [mounted, setMounted] = useState(false);
 
@@ -175,16 +301,19 @@ function InfiniteCanvasPage() {
         hasMoved: boolean;
         startX: number;
         startY: number;
-        initialSelectedNodes: { id: string; x: number; y: number }[];
+        initialSelectedNodes: Map<string, { x: number; y: number }>;
+        movedIds: Set<string>;
     }>({
         isDraggingNode: false,
         hasMoved: false,
         startX: 0,
         startY: 0,
-        initialSelectedNodes: [],
+        initialSelectedNodes: new Map(),
+        movedIds: new Set(),
     });
 
     const config = useConfigStore((state) => state.config);
+    const updateConfig = useConfigStore((state) => state.updateConfig);
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -197,7 +326,13 @@ function InfiniteCanvasPage() {
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const colorTheme = useThemeStore((state) => state.theme);
+    const theme = canvasThemes[colorTheme];
+    const focusMode = useCanvasWorkspaceStore((state) => state.focusMode);
+    const viewMode = useCanvasWorkspaceStore((state) => state.viewMode);
+    const setViewMode = useCanvasWorkspaceStore((state) => state.setViewMode);
+    const setFocusMode = useCanvasWorkspaceStore((state) => state.setFocusMode);
+    const setSearchOpen = useCanvasWorkspaceStore((state) => state.setSearchOpen);
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
     const [connections, setConnections] = useState<CanvasConnection[]>([]);
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
@@ -210,37 +345,115 @@ function InfiniteCanvasPage() {
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
     const [connectingParams, setConnectingParams] = useState<ConnectionHandle | null>(null);
     const [connectionTargetNodeId, setConnectionTargetNodeId] = useState<string | null>(null);
+    const [connectionTargetPortId, setConnectionTargetPortId] = useState<string | null>(null);
     const [pendingConnectionCreate, setPendingConnectionCreate] = useState<PendingConnectionCreate | null>(null);
     const [mouseWorld, setMouseWorld] = useState<Position>({ x: 0, y: 0 });
     const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [nodeCreatePosition, setNodeCreatePosition] = useState<Position | null>(null);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
-    const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
+    const [isMiniMapOpen, setIsMiniMapOpen] = useState(true);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
+    const [backgroundTone, setBackgroundTone] = useState<CanvasBackgroundTone>("neutral");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
+
+    useEffect(() => {
+        const root = document.documentElement;
+        const surface = canvasSurfacePalette(colorTheme, backgroundTone);
+        const variables = {
+            "--canvas-background": surface.background,
+            "--canvas-grid-dot": surface.dot,
+            "--canvas-grid-line": surface.line,
+            "--canvas-surface-fill": surface.fill,
+            "--canvas-surface-panel": surface.panel,
+            "--canvas-surface-stroke": surface.stroke,
+            "--canvas-toolbar-panel": surface.toolbarPanel,
+            "--canvas-toolbar-border": surface.toolbarBorder,
+            "--canvas-toolbar-hover": surface.toolbarHover,
+        };
+
+        root.dataset.canvasTone = backgroundTone;
+        Object.entries(variables).forEach(([name, value]) => root.style.setProperty(name, value));
+        return () => {
+            if (root.dataset.canvasTone === backgroundTone) delete root.dataset.canvasTone;
+            Object.keys(variables).forEach((name) => root.style.removeProperty(name));
+        };
+    }, [backgroundTone, colorTheme]);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
     const [infoNodeId, setInfoNodeId] = useState<string | null>(null);
     const [pluginManagerOpen, setPluginManagerOpen] = useState(false);
+    const [runningHubWorkflowImportOpen, setRunningHubWorkflowImportOpen] = useState(false);
+    const [workflowLibraryOpen, setWorkflowLibraryOpen] = useState(false);
     const [cropNodeId, setCropNodeId] = useState<string | null>(null);
     const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
     const [splitNodeId, setSplitNodeId] = useState<string | null>(null);
     const [upscaleNodeId, setUpscaleNodeId] = useState<string | null>(null);
-    const [superResolveNodeId, setSuperResolveNodeId] = useState<string | null>(null);
+    const [seedVrUpscaleNodeId, setSeedVrUpscaleNodeId] = useState<string | null>(null);
+    const [seedVrUpscalePixel, setSeedVrUpscalePixel] = useState<string | number>(RUNNING_HUB_SEEDVR_DEFAULT_PIXEL);
+    const [seedVrUpscaleInstanceType, setSeedVrUpscaleInstanceType] = useState<RunningHubWorkflowInstanceType>("plus");
     const [angleNodeId, setAngleNodeId] = useState<string | null>(null);
+    const [personNodeId, setPersonNodeId] = useState<string | null>(null);
+    const [personAdjustStep, setPersonAdjustStep] = useState<"menu" | "emotion" | "texture">("menu");
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+    const [previewZoom, setPreviewZoom] = useState(IMAGE_PREVIEW_MIN_ZOOM);
+    const [previewOffset, setPreviewOffset] = useState({ x: 0, y: 0 });
+    const [isPreviewDragging, setIsPreviewDragging] = useState(false);
     const [titleEditing, setTitleEditing] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
     const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
     const [expandedBatchNodeIds, setExpandedBatchNodeIds] = useState<Set<string>>(new Set());
     const [isNodeDragging, setIsNodeDragging] = useState(false);
     const [isNodeResizing, setIsNodeResizing] = useState(false);
+
+    const runningHubChannel = useMemo(() => config.channels.find((channel) => channel.apiFormat === "runninghub"), [config.channels]);
+    const seedVrUpscaleModel = useMemo(() => findSeedVrUpscaleModel(config.channels), [config.channels]);
+    const seedVrPixelField = useMemo(() => seedVrUpscalePixelField(seedVrUpscaleModel?.model.runningHub), [seedVrUpscaleModel]);
+    const handleRunningHubWorkflowImported = useCallback(
+        (model: ChannelModel) => {
+            if (!runningHubChannel) return;
+            const channels = config.channels.map((channel) => (channel.id === runningHubChannel.id ? { ...channel, models: [model, ...channel.models.filter((item) => item.name !== model.name)] } : channel));
+            updateConfig("channels", channels);
+            updateConfig("models", modelOptionsFromChannels(channels));
+            updateConfig(model.capability === "image" ? "imageModel" : model.capability === "audio" ? "audioModel" : model.capability === "text" ? "textModel" : "videoModel", encodeChannelModel(runningHubChannel.id, model.name));
+        },
+        [config.channels, runningHubChannel, updateConfig],
+    );
+    const handleRunningHubWorkflowDeleted = useCallback(
+        (item: CanvasWorkflowLibraryItem) => {
+            const decoded = decodeChannelModel(item.id);
+            if (!decoded) return;
+            const channel = config.channels.find((entry) => entry.id === decoded.channelId);
+            if (!channel?.models.some((model) => model.name === decoded.model)) return;
+            const channels = config.channels.map((entry) => (entry.id === decoded.channelId ? { ...entry, models: entry.models.filter((model) => model.name !== decoded.model) } : entry));
+            updateConfig("channels", channels);
+            updateConfig("models", modelOptionsFromChannels(channels));
+
+            const fallbackFor = (capability: ChannelModel["capability"]) => {
+                for (const entry of channels) {
+                    const model = entry.models.find((candidate) => candidate.capability === capability);
+                    if (model) return encodeChannelModel(entry.id, model.name);
+                }
+                return "";
+            };
+            const defaults = [
+                ["image", "imageModel"],
+                ["video", "videoModel"],
+                ["text", "textModel"],
+                ["audio", "audioModel"],
+            ] as const;
+            defaults.forEach(([capability, key]) => {
+                if (config[key] === item.id) updateConfig(key, fallbackFor(capability));
+            });
+            if (config.model === item.id) updateConfig("model", fallbackFor(item.model.capability));
+        },
+        [config, updateConfig],
+    );
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
 
@@ -252,9 +465,12 @@ function InfiniteCanvasPage() {
     const generateNodeRef = useRef<((nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => Promise<void>) | null>(null);
     const connectingParamsRef = useRef(connectingParams);
     const connectionTargetNodeIdRef = useRef(connectionTargetNodeId);
+    const connectionTargetPortIdRef = useRef(connectionTargetPortId);
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
+    const videoPollIdsRef = useRef(new Set<string>());
+    const previewDragRef = useRef<{ pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number } | null>(null);
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -263,9 +479,10 @@ function InfiniteCanvasPage() {
             chatSessions,
             activeChatId,
             backgroundMode,
+            backgroundTone,
             showImageInfo,
         }),
-        [activeChatId, backgroundMode, chatSessions, showImageInfo],
+        [activeChatId, backgroundMode, backgroundTone, chatSessions, showImageInfo],
     );
 
     const cleanupCanvasFiles = useCallback(
@@ -287,34 +504,103 @@ function InfiniteCanvasPage() {
         if (request?.controller === controller) generationRequestsRef.current.delete(targetNodeId);
     }, []);
 
-    const stopGenerationByRunningId = useCallback((runningId: string) => {
-        const affectedNodeIds = new Set<string>();
-        generationRequestsRef.current.forEach((request) => {
-            if (request.runningNodeId !== runningId) return;
-            request.controller.abort();
-            generationRequestsRef.current.delete(request.targetNodeId);
-            affectedNodeIds.add(request.targetNodeId);
-            affectedNodeIds.add(request.originNodeId);
-        });
-        setRunningNodeId((current) => (current === runningId ? null : current));
-        if (!affectedNodeIds.size) return;
-        setNodes((prev) =>
-            prev.map((node) =>
-                affectedNodeIds.has(node.id) && node.metadata?.status === NODE_STATUS_LOADING
-                    ? {
-                          ...node,
-                          metadata: {
-                              ...node.metadata,
-                              status: NODE_STATUS_IDLE,
-                              errorDetails: undefined,
-                              images: node.metadata.images?.map((image) => (image.status === NODE_STATUS_LOADING ? { ...image, status: NODE_STATUS_ERROR, errorDetails: t("common.requestCanceled") } : image)),
-                              texts: node.metadata.texts?.map((text) => (text.status === NODE_STATUS_LOADING ? { ...text, status: NODE_STATUS_ERROR, errorDetails: t("common.requestCanceled") } : text)),
-                          },
-                      }
-                    : node,
-            ),
-        );
-    }, [t]);
+    const pollVideoNodeTask = useCallback(
+        async (node: CanvasNodeData, silent = false) => {
+            const taskId = node.metadata?.videoTaskId;
+            if (!taskId || node.metadata?.content || generationRequestsRef.current.has(node.id) || videoPollIdsRef.current.has(node.id)) return;
+            videoPollIdsRef.current.add(node.id);
+            let controller: AbortController | undefined;
+            try {
+                const generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
+                if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                    if (silent) {
+                        setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: t("workbench.configFirst") } } : item)));
+                        return;
+                    }
+                    openConfigDialog(true);
+                    return;
+                }
+                setRunningNodeId(node.id);
+                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
+                controller = startGenerationRequest(node.id, node.id, node.id);
+                const video = await storeGeneratedVideo(await waitForVideoGenerationTask(generationConfig, { id: taskId, provider: "openai", model: generationConfig.model }, { signal: controller.signal }));
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? applyGeneratedVideo(item, video, {
+                                  prompt: item.metadata?.prompt,
+                                  model: generationConfig.model,
+                                  size: generationConfig.size,
+                                  seconds: generationConfig.videoSeconds,
+                                  vquality: generationConfig.vquality,
+                                  videoMode: generationConfig.videoMode,
+                                  generateAudio: generationConfig.videoGenerateAudio,
+                                  watermark: generationConfig.videoWatermark,
+                              })
+                            : item,
+                    ),
+                );
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
+                if (!silent) message.error(errorDetails);
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      status: item.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
+                                      errorDetails: item.metadata?.content ? undefined : errorDetails,
+                                      ...(isVideoTaskFailed(error) ? { videoTaskId: undefined, videoTaskProvider: undefined } : {}),
+                                  },
+                              }
+                            : item,
+                    ),
+                );
+            } finally {
+                videoPollIdsRef.current.delete(node.id);
+                if (controller) {
+                    finishGenerationRequest(node.id, controller);
+                    setRunningNodeId((current) => (current === node.id ? null : current));
+                }
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+    );
+
+    const stopGenerationByRunningId = useCallback(
+        (runningId: string) => {
+            const affectedNodeIds = new Set<string>();
+            generationRequestsRef.current.forEach((request) => {
+                if (request.runningNodeId !== runningId) return;
+                request.controller.abort();
+                generationRequestsRef.current.delete(request.targetNodeId);
+                affectedNodeIds.add(request.targetNodeId);
+                affectedNodeIds.add(request.originNodeId);
+            });
+            setRunningNodeId((current) => (current === runningId ? null : current));
+            if (!affectedNodeIds.size) return;
+            setNodes((prev) =>
+                prev.map((node) =>
+                    affectedNodeIds.has(node.id) && node.metadata?.status === NODE_STATUS_LOADING
+                        ? {
+                              ...node,
+                              metadata: {
+                                  ...node.metadata,
+                                  status: NODE_STATUS_IDLE,
+                                  errorDetails: undefined,
+                                  images: node.metadata.images?.map((image) => (image.status === NODE_STATUS_LOADING ? { ...image, status: NODE_STATUS_ERROR, errorDetails: t("common.requestCanceled") } : image)),
+                                  texts: node.metadata.texts?.map((text) => (text.status === NODE_STATUS_LOADING ? { ...text, status: NODE_STATUS_ERROR, errorDetails: t("common.requestCanceled") } : text)),
+                              },
+                          }
+                        : node,
+                ),
+            );
+        },
+        [t],
+    );
 
     const confirmStopGeneration = useCallback(
         (nodeId: string) => {
@@ -332,41 +618,92 @@ function InfiniteCanvasPage() {
 
     useEffect(() => {
         if (!hydrated) return;
+        let active = true;
         setProjectLoaded(false);
         const project = openProject(projectId);
         if (!project) {
             navigate("/canvas", { replace: true });
-            return;
+            return () => {
+                active = false;
+            };
         }
 
-        const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
-            setNodes(restoredNodes);
-            setConnections(project.connections);
-            setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setViewport(project.viewport);
-            historyRef.current = { past: [], future: [] };
-            if (historyCommitTimerRef.current) {
-                clearTimeout(historyCommitTimerRef.current);
-                historyCommitTimerRef.current = null;
-            }
-            lastHistoryRef.current = {
-                nodes: restoredNodes,
-                connections: project.connections,
-                chatSessions: restoredSessions,
-                activeChatId: project.activeChatId || null,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
-            };
-            setHistoryState({ canUndo: false, canRedo: false });
-            setProjectLoaded(true);
+        const restoredNodes = arrangeAllGroupImageNodes(resetInterruptedGeneration(project.nodes)
+                .map(normalizeGeneratedImageScale)
+                .map(normalizeGeneratedImageTitle)
+                .map((node) => normalizeWorkflowNodeScale(node)),
+            { fit: true },
+        );
+        const restoredSessions = project.chatSessions || [];
+        setNodes(restoredNodes);
+        setConnections(project.connections);
+        setChatSessions(restoredSessions);
+        setActiveChatId(project.activeChatId || null);
+        setBackgroundMode(project.backgroundMode);
+        setBackgroundTone(project.backgroundTone || "neutral");
+        setShowImageInfo(project.showImageInfo || false);
+        setViewport(project.viewport);
+        historyRef.current = { past: [], future: [] };
+        if (historyCommitTimerRef.current) {
+            clearTimeout(historyCommitTimerRef.current);
+            historyCommitTimerRef.current = null;
+        }
+        lastHistoryRef.current = {
+            nodes: restoredNodes,
+            connections: project.connections,
+            chatSessions: restoredSessions,
+            activeChatId: project.activeChatId || null,
+            backgroundMode: project.backgroundMode,
+            backgroundTone: project.backgroundTone || "neutral",
+            showImageInfo: project.showImageInfo || false,
         };
-        void restore();
+        setHistoryState({ canUndo: false, canRedo: false });
+        setProjectLoaded(true);
+        void hydrateCanvasImages(restoredNodes)
+            .then((hydratedNodes) => {
+                if (!active) return;
+                const normalizedNodes = hydratedNodes
+                    .map(normalizeGeneratedImageScale)
+                    .map(normalizeGeneratedImageTitle)
+                    .map((node) => normalizeWorkflowNodeScale(node));
+                setNodes((current) => (current === restoredNodes ? normalizedNodes : current));
+            })
+            .catch((error) => console.warn("画布媒体恢复失败，已保留原始节点", error));
+        void hydrateAssistantImages(restoredSessions)
+            .then((hydratedSessions) => {
+                if (active) setChatSessions((current) => (current === restoredSessions ? hydratedSessions : current));
+            })
+            .catch((error) => console.warn("画布会话媒体恢复失败，已保留原始记录", error));
+
+        return () => {
+            active = false;
+        };
     }, [hydrated, navigate, openProject, projectId]);
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        nodesRef.current.filter(hasResumableVideoTask).forEach((node) => void pollVideoNodeTask(node, true));
+        // 恢复画布后只自动轮询一次，避免配置更新时重复创建轮询。
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [projectLoaded]);
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        setNodes((prev) => {
+            let changed = false;
+            const normalized = prev.map((node) => {
+                const next = normalizeWorkflowNodeScale(node, effectiveConfig);
+                changed ||= next !== node;
+                return next;
+            });
+            return changed ? normalized : prev;
+        });
+    }, [effectiveConfig, projectLoaded]);
+
+    useEffect(() => {
+        if (!projectLoaded) return;
+        setConnections((prev) => migrateUnambiguousRunningHubLegacyConnections(prev, nodes, (node) => runningHubResourceForNode(effectiveConfig, node)));
+    }, [effectiveConfig, nodes, projectLoaded]);
 
     useEffect(() => {
         if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
@@ -383,6 +720,7 @@ function InfiniteCanvasPage() {
             previous.chatSessions === next.chatSessions &&
             previous.activeChatId === next.activeChatId &&
             previous.backgroundMode === next.backgroundMode &&
+            previous.backgroundTone === next.backgroundTone &&
             previous.showImageInfo === next.showImageInfo
         )
             return;
@@ -405,12 +743,12 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
         };
-    }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
+    }, [activeChatId, backgroundMode, backgroundTone, chatSessions, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
 
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current) return;
-        updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
-    }, [activeChatId, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+        updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, backgroundTone, showImageInfo });
+    }, [activeChatId, backgroundMode, backgroundTone, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
 
     useEffect(() => {
         if (!dialogNodeId) setNodeImageSettingsOpen(false);
@@ -435,8 +773,9 @@ function InfiniteCanvasPage() {
         viewportRef.current = viewport;
         connectingParamsRef.current = connectingParams;
         connectionTargetNodeIdRef.current = connectionTargetNodeId;
+        connectionTargetPortIdRef.current = connectionTargetPortId;
         pendingConnectionCreateRef.current = pendingConnectionCreate;
-    }, [nodes, connections, selectedNodeIds, viewport, connectingParams, connectionTargetNodeId, pendingConnectionCreate]);
+    }, [nodes, connections, selectedNodeIds, viewport, connectingParams, connectionTargetNodeId, connectionTargetPortId, pendingConnectionCreate]);
 
     useLayoutEffect(() => {
         selectionBoxRef.current = selectionBox;
@@ -462,10 +801,13 @@ function InfiniteCanvasPage() {
     }, []);
 
     const screenToCanvas = useCallback((clientX: number, clientY: number) => {
-        const rect = containerRef.current?.getBoundingClientRect();
+        const canvas = containerRef.current;
+        const rect = canvas?.getBoundingClientRect();
         const currentViewport = viewportRef.current;
-        const localX = clientX - (rect?.left || 0);
-        const localY = clientY - (rect?.top || 0);
+        // overflow:hidden 容器仍可能保留浏览器自动滚动产生的 scroll offset；
+        // 坐标换算必须和实际渲染位置一致，否则拖线会命中视觉位置之外的世界坐标。
+        const localX = clientX - (rect?.left || 0) + (canvas?.scrollLeft || 0);
+        const localY = clientY - (rect?.top || 0) + (canvas?.scrollTop || 0);
 
         return {
             x: (localX - currentViewport.x) / currentViewport.k,
@@ -484,6 +826,8 @@ function InfiniteCanvasPage() {
         if (!next) {
             connectionTargetNodeIdRef.current = null;
             setConnectionTargetNodeId(null);
+            connectionTargetPortIdRef.current = null;
+            setConnectionTargetPortId(null);
         }
     }, []);
 
@@ -498,18 +842,18 @@ function InfiniteCanvasPage() {
     const hideNodeToolbar = useCallback(() => {}, []);
 
     const connectNodes = useCallback(
-        (current: ConnectionHandle, targetNodeId: string) => {
+        (current: ConnectionHandle, targetNodeId: string, targetPortId?: string) => {
             if (current.nodeId === targetNodeId) return;
 
-            const connection = normalizeConnection(current.nodeId, targetNodeId, nodesRef.current, current.handleType);
+            const connection = normalizeConnection(current.nodeId, targetNodeId, nodesRef.current, current.handleType, current.portId, targetPortId);
             if (!connection) {
                 message.warning(t("canvas.projectPage.configConnection"));
                 return;
             }
-            const { fromNodeId, toNodeId } = connection;
-            const exists = connectionsRef.current.some((conn) => conn.fromNodeId === fromNodeId && conn.toNodeId === toNodeId);
+            const { fromNodeId, toNodeId, toPort } = connection;
+            const exists = connectionsRef.current.some((conn) => conn.fromNodeId === fromNodeId && conn.toNodeId === toNodeId && conn.toPort === toPort);
             if (!exists) {
-                setConnections((prev) => [...prev, { id: `conn-${Date.now()}`, fromNodeId, toNodeId }]);
+                setConnections((prev) => [...prev.filter((conn) => !(toPort && conn.toNodeId === toNodeId && sameRunningHubWorkflowPort(conn.toPort, toPort))), { id: `conn-${Date.now()}`, fromNodeId, toNodeId, ...(toPort ? { toPort } : {}) }]);
             }
             setContextMenu(null);
         },
@@ -517,10 +861,28 @@ function InfiniteCanvasPage() {
     );
 
     const createConnectedNode = useCallback(
-        (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
-            const newNode = createCanvasNode(type, pending.position, metadata);
-            const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
+        (request: ConnectionCreateRequest, pending: PendingConnectionCreate) => {
+            const storyboardRows: CanvasStoryboardRow[] = [1, 2].map(() => ({ id: `shot-${nanoid()}`, duration: "6", shotPrompt: "", dialogue: "", asset: "未关联" }));
+            const metadata =
+                request.type === CanvasNodeType.Config
+                    ? {
+                          model: effectiveConfig.imageModel || effectiveConfig.model,
+                          quality: effectiveConfig.quality,
+                          imageResolution: effectiveConfig.imageResolution,
+                          size: effectiveConfig.size,
+                          background: effectiveConfig.background,
+                          count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
+                      }
+                    : request.initialPrompt
+                      ? { prompt: request.initialPrompt, generationMode: "text" as const, ...(request.storyboardMode ? { storyboardMode: true, storyboardRows } : {}) }
+                      : undefined;
+            const baseNode = createCanvasNode(request.type, pending.position, metadata);
+            const newNode = {
+                ...baseNode,
+                ...(request.storyboardMode ? { width: 900, height: 430, position: { x: pending.position.x - 450, y: pending.position.y - 215 } } : {}),
+                ...(request.title ? { title: request.title } : {}),
+            };
+            const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType, pending.connection.portId);
             if (!connection) {
                 message.warning(t("canvas.projectPage.configConnection"));
                 return;
@@ -529,11 +891,14 @@ function InfiniteCanvasPage() {
             setConnections((prev) => [...prev, { id: nanoid(), ...connection }]);
             setSelectedNodeIds(new Set([newNode.id]));
             setSelectedConnectionId(null);
-            if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio) setDialogNodeId(newNode.id);
+            // A node created from a connection is the next generation step: open its
+            // matching composer for every generation-capable type, including text
+            // and audio, so the new menu item is immediately usable.
+            setDialogNodeId(newNode.id);
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, setConnecting, t],
+        [effectiveConfig.background, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.imageResolution, effectiveConfig.model, effectiveConfig.quality, effectiveConfig.size, message, setConnecting, t],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -548,49 +913,91 @@ function InfiniteCanvasPage() {
             const padding = CONNECTION_NODE_HIT_PADDING / scale;
             const handleRadius = CONNECTION_HANDLE_HIT_RADIUS / scale;
             let isNearNode = false;
+            const portElement = document.elementsFromPoint(clientX, clientY).find((element) => element instanceof HTMLElement && Boolean(element.dataset.rhPort)) as HTMLElement | undefined;
+            const portId = portElement?.dataset.rhPort;
+            const portNodeId = portElement?.closest<HTMLElement>("[data-node-id]")?.dataset.nodeId;
+            const sourceNode = current.handleType === "source" ? nodesRef.current.find((node) => node.id === current.nodeId) : undefined;
+            if (portId && portNodeId && portNodeId !== current.nodeId) {
+                const portNode = nodesRef.current.find((node) => node.id === portNodeId);
+                const resource = portNode ? runningHubResourceForNode(effectiveConfig, portNode) : undefined;
+                const resolvedPort = resource && sourceNode && portElement.dataset.rhAutoPort ? runningHubWorkflowAutoPort(resource, sourceNode.type, connectionsRef.current, portNodeId) : portId;
+                return resolvedPort && normalizeConnection(current.nodeId, portNodeId, nodesRef.current, current.handleType, current.portId, resolvedPort)
+                    ? { nodeId: portNodeId, portId: resolvedPort, isNearNode: true }
+                    : { nodeId: portNodeId, isNearNode: true };
+            }
             let bestNodeId: string | null = null;
+            let bestPortId: string | undefined;
             let bestPriority = Number.POSITIVE_INFINITY;
 
-            [...nodesRef.current]
-                .reverse()
-                .forEach((node) => {
-                    const anchor = getConnectionTargetAnchor(node, current);
-                    const dx = world.x - anchor.x;
-                    const dy = world.y - anchor.y;
-                    const hitsHandle = dx * dx + dy * dy <= handleRadius * handleRadius;
-                    const hitsInside = world.x >= node.position.x && world.x <= node.position.x + node.width && world.y >= node.position.y && world.y <= node.position.y + node.height;
-                    const hitsExpanded = world.x >= node.position.x - padding && world.x <= node.position.x + node.width + padding && world.y >= node.position.y - padding && world.y <= node.position.y + node.height + padding;
+            [...nodesRef.current].reverse().forEach((node) => {
+                const anchor = getConnectionTargetAnchor(node, current);
+                const dx = world.x - anchor.x;
+                const dy = world.y - anchor.y;
+                const hitsHandle = dx * dx + dy * dy <= handleRadius * handleRadius;
+                const runningHubResource = runningHubResourceForNode(effectiveConfig, node);
+                const displayHeight = node.height;
+                const hitsInside = world.x >= node.position.x && world.x <= node.position.x + node.width && world.y >= node.position.y && world.y <= node.position.y + displayHeight;
+                const hitsExpanded = world.x >= node.position.x - padding && world.x <= node.position.x + node.width + padding && world.y >= node.position.y - padding && world.y <= node.position.y + displayHeight + padding;
 
-                    if (!hitsHandle && !hitsInside && !hitsExpanded) return;
-                    isNearNode = true;
-                    if (node.id === current.nodeId || !normalizeConnection(current.nodeId, node.id, nodesRef.current, current.handleType)) return;
+                if (!hitsHandle && !hitsInside && !hitsExpanded) return;
+                isNearNode = true;
+                const automaticPort = runningHubResource && sourceNode ? runningHubWorkflowAutoPort(runningHubResource, sourceNode.type, connectionsRef.current, node.id) : undefined;
+                if (node.id === current.nodeId || (runningHubResource && sourceNode && !automaticPort) || !normalizeConnection(current.nodeId, node.id, nodesRef.current, current.handleType, current.portId, automaticPort)) return;
 
-                    const priority = hitsInside ? 0 : hitsHandle ? 1 : 2;
-                    if (priority < bestPriority) {
-                        bestNodeId = node.id;
-                        bestPriority = priority;
-                    }
-                });
+                const priority = hitsInside ? 0 : hitsHandle ? 1 : 2;
+                if (priority < bestPriority) {
+                    bestNodeId = node.id;
+                    bestPortId = automaticPort;
+                    bestPriority = priority;
+                }
+            });
 
-            return { nodeId: bestNodeId, isNearNode };
+            return { nodeId: bestNodeId, ...(bestPortId ? { portId: bestPortId } : {}), isNearNode };
         },
-        [screenToCanvas],
+        [effectiveConfig, screenToCanvas],
     );
 
-    const visibleNodes = useMemo(() => {
+    const viewBounds = useMemo(() => {
         const padding = 280;
         const rect = containerRef.current?.getBoundingClientRect();
         const width = rect?.width || size.width;
         const height = rect?.height || size.height;
         const viewLeft = -viewport.x / viewport.k - padding;
         const viewTop = -viewport.y / viewport.k - padding;
-        const viewRight = viewLeft + width / viewport.k + padding * 2;
-        const viewBottom = viewTop + height / viewport.k + padding * 2;
+        return {
+            left: viewLeft,
+            top: viewTop,
+            right: viewLeft + width / viewport.k + padding * 2,
+            bottom: viewTop + height / viewport.k + padding * 2,
+        };
+    }, [size.height, size.width, viewport.k, viewport.x, viewport.y]);
 
-        return nodes.filter((node) => node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
-    }, [nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
+    const visibleNodes = useMemo(
+        () => nodes.filter((node) => node.position.x + node.width > viewBounds.left && node.position.x < viewBounds.right && node.position.y + node.height > viewBounds.top && node.position.y < viewBounds.bottom),
+        [nodes, viewBounds],
+    );
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    const visibleConnections = useMemo(
+        () =>
+            connections.filter((connection) => {
+                const from = nodeById.get(connection.fromNodeId);
+                const to = nodeById.get(connection.toNodeId);
+                if (!from || !to) return false;
+                const workflowResource = runningHubResourceForNode(effectiveConfig, to);
+                const workflowScale = workflowResource ? runningHubWorkflowContentScale(to) : 1;
+                const workflowPortY = runningHubWorkflowPortY(connection.toPort, Boolean(to.metadata?.runningHubWorkflowPortsOpen), workflowResource);
+                return connectionIntersectsViewBounds(
+                    { x: from.position.x + from.width, y: from.position.y + from.height / 2 },
+                    {
+                        x: workflowPortY === undefined ? to.position.x : to.position.x + RUNNING_HUB_WORKFLOW_PORT_X * workflowScale,
+                        y: connection.toPort ? to.position.y + (workflowPortY === undefined ? to.height / 2 : workflowPortY * workflowScale) : to.position.y + to.height / 2,
+                    },
+                    viewBounds,
+                );
+            }),
+        [connections, effectiveConfig, nodeById, viewBounds],
+    );
     // The toolbar follows a single selected node selected by click, creation, marquee, or keyboard.
     // It stays hidden for multi-selection and while isNodeDragging is true.
     const singleSelectedNodeId = selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null;
@@ -600,12 +1007,22 @@ function InfiniteCanvasPage() {
     const maskEditNode = maskEditNodeId ? nodeById.get(maskEditNodeId) || null : null;
     const splitNode = splitNodeId ? nodeById.get(splitNodeId) || null : null;
     const upscaleNode = upscaleNodeId ? nodeById.get(upscaleNodeId) || null : null;
-    const superResolveNode = superResolveNodeId ? nodeById.get(superResolveNodeId) || null : null;
+    const seedVrUpscaleNode = seedVrUpscaleNodeId ? nodeById.get(seedVrUpscaleNodeId) || null : null;
     const angleNode = angleNodeId ? nodeById.get(angleNodeId) || null : null;
+    const personNode = personNodeId ? nodeById.get(personNodeId) || null : null;
     const contextMenuNode = contextMenu?.type === "node" ? nodeById.get(contextMenu.nodeId) || null : null;
     const previewNode = previewNodeId ? nodeById.get(previewNodeId) || null : null;
     const previewContent = previewImageId ? previewNode?.metadata?.images?.find((image) => image.id === previewImageId)?.content : previewNode?.metadata?.content;
     const hasMultipleSelectedNodes = selectedNodeIds.size > 1;
+
+    useEffect(() => {
+        setPreviewZoom(IMAGE_PREVIEW_MIN_ZOOM);
+        setPreviewOffset({ x: 0, y: 0 });
+        setIsPreviewDragging(false);
+    }, [previewContent]);
+    const selectedNodes = useMemo(() => nodes.filter((node) => selectedNodeIds.has(node.id)), [nodes, selectedNodeIds]);
+    const canGroupSelection = canGroupSelectedNodes(selectedNodeIds, nodes);
+    const canUngroupSelection = canUngroupSelectedNodes(selectedNodeIds, nodes);
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
     const groupChildCountById = useMemo(() => {
         const map = new Map<string, number>();
@@ -660,7 +1077,18 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [connections, nodeById]);
-    const referenceConnectedNodeIds = useMemo(() => new Set([referencePickerNodeId, ...(referencePickerNodeId ? connectedNodesByNodeId.get(referencePickerNodeId)?.flatMap((node) => node.type === CanvasNodeType.Group ? [node.id, ...getGroupResourceNodes(node.id, nodes).map((child) => child.id)] : [node.id]) || [] : [])].filter((id): id is string => Boolean(id))), [connectedNodesByNodeId, nodes, referencePickerNodeId]);
+    const referenceConnectedNodeIds = useMemo(
+        () =>
+            new Set(
+                [
+                    referencePickerNodeId,
+                    ...(referencePickerNodeId
+                        ? connectedNodesByNodeId.get(referencePickerNodeId)?.flatMap((node) => (node.type === CanvasNodeType.Group ? [node.id, ...getGroupResourceNodes(node.id, nodes).map((child) => child.id)] : [node.id])) || []
+                        : []),
+                ].filter((id): id is string => Boolean(id)),
+            ),
+        [connectedNodesByNodeId, nodes, referencePickerNodeId],
+    );
     const { applyAgentOps } = useAgentBridge({
         projectId,
         title: currentProject?.title,
@@ -700,7 +1128,10 @@ function InfiniteCanvasPage() {
                 type === CanvasNodeType.Config
                     ? {
                           model: effectiveConfig.imageModel || effectiveConfig.model,
+                          quality: effectiveConfig.quality,
+                          imageResolution: effectiveConfig.imageResolution,
                           size: effectiveConfig.size,
+                          background: effectiveConfig.background,
                           count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
                       }
                     : undefined;
@@ -722,7 +1153,34 @@ function InfiniteCanvasPage() {
                     : isBuiltinType(type) && type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Group;
             if (wantsPanel) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
+        [effectiveConfig.background, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.imageResolution, effectiveConfig.model, effectiveConfig.quality, effectiveConfig.size, getCanvasCenter],
+    );
+
+    const addWorkflowLibraryNode = useCallback(
+        (item: CanvasWorkflowLibraryItem) => {
+            const center = getCanvasCenter();
+            const resource = item.model.runningHub;
+            if (!resource) return;
+            const cardHeight = runningHubWorkflowCardHeight(resource, false);
+            const node = createCanvasNode(CanvasNodeType.Config, center, {
+                generationMode: item.model.capability,
+                model: item.id,
+                runningHubWorkflowValues: {},
+            });
+            const workflowNode = {
+                ...node,
+                title: item.title,
+                width: RUNNING_HUB_WORKFLOW_NODE_WIDTH,
+                height: cardHeight,
+                position: { x: center.x - RUNNING_HUB_WORKFLOW_NODE_WIDTH / 2, y: center.y - cardHeight / 2 },
+            };
+            setNodes((prev) => [...prev, workflowNode]);
+            setSelectedNodeIds(new Set([workflowNode.id]));
+            setSelectedConnectionId(null);
+            setDialogNodeId(null);
+            setWorkflowLibraryOpen(false);
+        },
+        [getCanvasCenter],
     );
 
     const deleteNodes = useCallback(
@@ -757,6 +1215,35 @@ function InfiniteCanvasPage() {
         [chatSessions, cleanupCanvasFiles, projectId],
     );
 
+    const groupSelection = useCallback(() => {
+        const selectedIds = selectedNodeIdsRef.current;
+        const members = collectGroupMemberNodes(selectedIds, nodesRef.current);
+        if (members.length < 2) return;
+        const rect = getGroupWrapRect(members);
+        const created = createCanvasNode(CanvasNodeType.Group, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+        const result = applyGroupSelection(selectedIds, nodesRef.current, connectionsRef.current, { ...created, position: { x: rect.x, y: rect.y }, width: rect.width, height: rect.height });
+        if (!result) return;
+        setNodes(result.nodes);
+        setConnections(result.connections);
+        setSelectedNodeIds(new Set(result.selectedIds));
+        setSelectedConnectionId(null);
+        setToolbarNodeId(result.selectedIds[0] || null);
+        setDialogNodeId(null);
+        setContextMenu(null);
+    }, []);
+
+    const ungroupSelection = useCallback((ids?: Set<string>) => {
+        const result = applyUngroupSelection(ids || selectedNodeIdsRef.current, nodesRef.current, connectionsRef.current);
+        if (!result) return;
+        setNodes(result.nodes);
+        setConnections(result.connections);
+        setSelectedNodeIds(new Set(result.selectedIds));
+        setSelectedConnectionId(null);
+        setToolbarNodeId(result.selectedIds.length === 1 ? result.selectedIds[0] : null);
+        setDialogNodeId(null);
+        setContextMenu(null);
+    }, []);
+
     const deleteConnection = useCallback((connectionId: string) => {
         setConnections((prev) => prev.filter((conn) => conn.id !== connectionId));
         setSelectedConnectionId((current) => (current === connectionId ? null : current));
@@ -781,12 +1268,15 @@ function InfiniteCanvasPage() {
         setReferencePickerNodeId(null);
     }, [referencePickerNodeId]);
 
-    const selectNodeReference = useCallback((fromNodeId: string) => {
-        if (!referencePickerNodeId || referenceConnectedNodeIds.has(fromNodeId)) return;
-        const source = nodesRef.current.find((node) => node.id === fromNodeId);
-        if (!source || !isCanvasReferenceNode(source, nodesRef.current)) return;
-        setConnections((prev) => [...prev, { id: nanoid(), fromNodeId, toNodeId: referencePickerNodeId }]);
-    }, [referenceConnectedNodeIds, referencePickerNodeId]);
+    const selectNodeReference = useCallback(
+        (fromNodeId: string) => {
+            if (!referencePickerNodeId || referenceConnectedNodeIds.has(fromNodeId)) return;
+            const source = nodesRef.current.find((node) => node.id === fromNodeId);
+            if (!source || !isCanvasReferenceNode(source, nodesRef.current)) return;
+            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId, toNodeId: referencePickerNodeId }]);
+        },
+        [referenceConnectedNodeIds, referencePickerNodeId],
+    );
 
     useEffect(() => {
         if (!referencePickerNodeId) return;
@@ -925,9 +1415,51 @@ function InfiniteCanvasPage() {
     }, [getCanvasCenter]);
 
     const resetViewport = useCallback(() => {
-        setViewport({ x: size.width / 2, y: size.height / 2, k: 1 });
+        if (focusAnimRef.current) cancelAnimationFrame(focusAnimRef.current);
+        setViewport(fitCanvasViewport(nodesRef.current, containerRef.current?.getBoundingClientRect() || size));
         setContextMenu(null);
     }, [size.height, size.width]);
+
+    const arrangeNodes = useCallback(() => {
+        if (focusAnimRef.current) cancelAnimationFrame(focusAnimRef.current);
+        const arranged = arrangeCanvasNodes(nodesRef.current, connectionsRef.current);
+        setNodes(arranged);
+        setViewport(fitCanvasViewport(arranged, containerRef.current?.getBoundingClientRect() || size));
+        setContextMenu(null);
+        setDialogNodeId(null);
+        setToolbarNodeId(null);
+        message.success("节点已整理，可撤销恢复原位置");
+    }, [message, size.height, size.width]);
+
+    useEffect(() => {
+        const handleWorkspaceKey = (event: KeyboardEvent) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (event.defaultPrevented || target?.closest("input,textarea,select,[contenteditable='true'],[data-canvas-shortcuts-ignore]")) return;
+            const modifier = event.metaKey || event.ctrlKey;
+            if (modifier && event.key.toLowerCase() === "k") {
+                event.preventDefault();
+                setSearchOpen(true);
+            } else if (modifier && event.shiftKey && event.key.toLowerCase() === "f") {
+                event.preventDefault();
+                setFocusMode(!focusMode);
+            } else if (event.shiftKey && event.code === "Digit1") {
+                event.preventDefault();
+                resetViewport();
+            } else if (event.key === "Escape" && focusMode) {
+                setFocusMode(false);
+            }
+        };
+        window.addEventListener("keydown", handleWorkspaceKey);
+        return () => window.removeEventListener("keydown", handleWorkspaceKey);
+    }, [focusMode, resetViewport, setFocusMode, setSearchOpen]);
+
+    useEffect(
+        () => () => {
+            setFocusMode(false);
+            setSearchOpen(false);
+        },
+        [setFocusMode, setSearchOpen],
+    );
 
     const focusNode = useCallback(
         (nodeId: string) => {
@@ -984,6 +1516,7 @@ function InfiniteCanvasPage() {
         setChatSessions(entry.chatSessions);
         setActiveChatId(entry.activeChatId);
         setBackgroundMode(entry.backgroundMode);
+        setBackgroundTone(entry.backgroundTone);
         setShowImageInfo(entry.showImageInfo);
         setSelectedNodeIds(new Set());
         setSelectedConnectionId(null);
@@ -1120,7 +1653,8 @@ function InfiniteCanvasPage() {
             hasMoved: false,
             startX: event.clientX,
             startY: event.clientY,
-            initialSelectedNodes: currentNodes.filter((node) => dragIds.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })),
+            initialSelectedNodes: new Map(currentNodes.filter((node) => dragIds.has(node.id)).map((node) => [node.id, { x: node.position.x, y: node.position.y }])),
+            movedIds: dragIds,
         };
         historyPausedRef.current = true;
         nodeDraggingRef.current = true;
@@ -1134,8 +1668,8 @@ function InfiniteCanvasPage() {
         }
         if (!dragRef.current.isDraggingNode) return;
 
-        const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.length === 1;
-        const clickedNodeId = dragRef.current.initialSelectedNodes[0]?.id;
+        const wasClick = !dragRef.current.hasMoved && dragRef.current.initialSelectedNodes.size === 1;
+        const clickedNodeId = dragRef.current.initialSelectedNodes.keys().next().value as string | undefined;
         const currentViewport = viewportRef.current;
         const dx = clientX == null ? 0 : (clientX - dragRef.current.startX) / currentViewport.k;
         const dy = clientY == null ? 0 : (clientY - dragRef.current.startY) / currentViewport.k;
@@ -1146,10 +1680,10 @@ function InfiniteCanvasPage() {
         setIsNodeDragging(false);
         setDropTargetGroupId(null);
         if (dragRef.current.hasMoved && clientX != null && clientY != null) {
-            const movedIds = new Set(initialPositions.map((item) => item.id));
+            const movedIds = dragRef.current.movedIds;
             setNodes((prev) => {
                 const moved = prev.map((node) => {
-                    const initial = initialPositions.find((item) => item.id === node.id);
+                    const initial = initialPositions.get(node.id);
                     return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                 });
                 const targetGroup = findGroupDropTarget(movedIds, moved);
@@ -1165,13 +1699,16 @@ function InfiniteCanvasPage() {
 
         dragRef.current.isDraggingNode = false;
         dragRef.current.hasMoved = false;
-        dragRef.current.initialSelectedNodes = [];
+        dragRef.current.initialSelectedNodes = new Map();
+        dragRef.current.movedIds = new Set();
         if (wasClick && clickedNodeId) {
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
             const clickedDefinition = clickedNode ? getNodeDefinition(clickedNode.type) : undefined;
             if (clickedDefinition?.hidePanel) {
                 // Clicking a display-only plugin node selects it without opening a lower panel.
                 setDialogNodeId((current) => (current === clickedNodeId ? current : null));
+            } else if (clickedNode?.type === CanvasNodeType.Text) {
+                setDialogNodeId(null);
             } else if (clickedNode?.type !== CanvasNodeType.Group) {
                 setDialogNodeId(clickedNodeId);
             }
@@ -1190,18 +1727,17 @@ function InfiniteCanvasPage() {
                     dragRef.current.hasMoved = true;
                 }
 
-                const movedIds = new Set(initialPositions.map((item) => item.id));
-                const previewNodes = nodesRef.current.map((node) => {
-                    const initial = initialPositions.find((item) => item.id === node.id);
-                    return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
-                });
-                setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
-
                 if (rafRef.current) cancelAnimationFrame(rafRef.current);
                 rafRef.current = requestAnimationFrame(() => {
+                    const movedIds = dragRef.current.movedIds;
+                    const previewNodes = nodesRef.current.map((node) => {
+                        const initial = initialPositions.get(node.id);
+                        return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
+                    });
+                    setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
                     setNodes((prev) =>
                         prev.map((node) => {
-                            const initial = initialPositions.find((item) => item.id === node.id);
+                            const initial = initialPositions.get(node.id);
                             return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                         }),
                     );
@@ -1214,6 +1750,8 @@ function InfiniteCanvasPage() {
                 const dropTarget = getConnectionDropTarget(event.clientX, event.clientY, connectingParamsRef.current);
                 connectionTargetNodeIdRef.current = dropTarget.nodeId;
                 setConnectionTargetNodeId(dropTarget.nodeId);
+                connectionTargetPortIdRef.current = dropTarget.portId || null;
+                setConnectionTargetPortId(dropTarget.portId || null);
                 setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             }
         },
@@ -1238,12 +1776,11 @@ function InfiniteCanvasPage() {
             const rectH = Math.abs(world.y - currentSelection.startWorldY);
             const nextSelected = new Set<string>(currentSelection.additive ? currentSelection.initialSelectedNodeIds : []);
 
-            nodesRef.current
-                .forEach((node) => {
-                    const intersects = rectX < node.position.x + node.width && rectX + rectW > node.position.x && rectY < node.position.y + node.height && rectY + rectH > node.position.y;
+            nodesRef.current.forEach((node) => {
+                const intersects = rectX < node.position.x + node.width && rectX + rectW > node.position.x && rectY < node.position.y + node.height && rectY + rectH > node.position.y;
 
-                    if (intersects) nextSelected.add(node.id);
-                });
+                if (intersects) nextSelected.add(node.id);
+            });
 
             const nextSelectionBox = { ...currentSelection, currentWorldX: world.x, currentWorldY: world.y };
             selectionBoxRef.current = nextSelectionBox;
@@ -1266,7 +1803,7 @@ function InfiniteCanvasPage() {
             if (currentConnection) {
                 const dropTarget = getConnectionDropTarget(event.clientX, event.clientY, currentConnection);
                 if (dropTarget.nodeId) {
-                    connectNodes(currentConnection, dropTarget.nodeId);
+                    connectNodes(currentConnection, dropTarget.nodeId, dropTarget.portId);
                     setConnecting(null);
                 } else if (dropTarget.isNearNode) {
                     setConnecting(null);
@@ -1300,7 +1837,7 @@ function InfiniteCanvasPage() {
 
     const createImageFileNode = useCallback(async (file: File, position: Position) => {
         const image = await uploadImage(file);
-        const size = fitNodeSize(image.width, image.height);
+        const size = fitImageNodeSize(image.width, image.height);
         const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const newNode: CanvasNodeData = {
             id,
@@ -1359,6 +1896,40 @@ function InfiniteCanvasPage() {
         setSelectedConnectionId(null);
     }, []);
 
+    const uploadWorkflowMaterial = useCallback(
+        async (workflowNodeId: string, portId: string, kind: "image" | "video" | "audio", file: File) => {
+            const workflow = nodesRef.current.find((item) => item.id === workflowNodeId);
+            if (!workflow) return;
+            try {
+                const id = `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                let material: CanvasNodeData;
+                if (kind === "image") {
+                    const image = await uploadImage(file);
+                    const size = fitImageNodeSize(image.width, image.height);
+                    material = { id, type: CanvasNodeType.Image, title: file.name, position: { x: workflow.position.x - size.width - 96, y: workflow.position.y + 72 }, width: size.width, height: size.height, metadata: imageMetadata(image) };
+                } else if (kind === "video") {
+                    const video = await uploadMediaFile(file, "video");
+                    const size = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                    material = { id, type: CanvasNodeType.Video, title: file.name, position: { x: workflow.position.x - size.width - 96, y: workflow.position.y + 72 }, width: size.width, height: size.height, metadata: videoMetadata(video) };
+                } else {
+                    const audio = await uploadMediaFile(file, "audio");
+                    const size = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
+                    material = { id, type: CanvasNodeType.Audio, title: file.name, position: { x: workflow.position.x - size.width - 96, y: workflow.position.y + 72 }, width: size.width, height: size.height, metadata: audioMetadata(audio) };
+                }
+                setNodes((prev) => [...prev, material]);
+                setConnections((prev) => [
+                    ...prev.filter((connection) => !(connection.toNodeId === workflowNodeId && sameRunningHubWorkflowPort(connection.toPort, portId))),
+                    { id: nanoid(), fromNodeId: material.id, toNodeId: workflowNodeId, toPort: portId },
+                ]);
+                setSelectedNodeIds(new Set([material.id]));
+                setSelectedConnectionId(null);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "上传工作流素材失败");
+            }
+        },
+        [message],
+    );
+
     const createTextNodeFromClipboard = useCallback(
         (text: string) => {
             const trimmed = text.trim();
@@ -1401,7 +1972,8 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             const target = event.target instanceof Element ? event.target : null;
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-shortcuts-ignore]")) return;
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-shortcuts-ignore]"))
+                return;
 
             const key = event.key.toLowerCase();
             const isModifierShortcut = event.metaKey || event.ctrlKey;
@@ -1442,6 +2014,21 @@ function InfiniteCanvasPage() {
                 return;
             }
 
+            if (isModifierShortcut && !event.altKey && key === "g") {
+                if (event.shiftKey) {
+                    if (canUngroupSelectedNodes(selectedNodeIdsRef.current, nodesRef.current)) {
+                        event.preventDefault();
+                        ungroupSelection();
+                    }
+                    return;
+                }
+                if (canGroupSelectedNodes(selectedNodeIdsRef.current, nodesRef.current)) {
+                    event.preventDefault();
+                    groupSelection();
+                }
+                return;
+            }
+
             if (event.key === "Delete" || event.key === "Backspace") {
                 if (selectedNodeIdsRef.current.size) {
                     deleteNodes(new Set(selectedNodeIdsRef.current));
@@ -1469,23 +2056,41 @@ function InfiniteCanvasPage() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [copySelectedNodes, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
+    }, [copySelectedNodes, deleteConnection, deleteNodes, groupSelection, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas, ungroupSelection]);
 
     const handleConnectStart = useCallback(
-        (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target") => {
+        (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target", portId?: string) => {
             event.stopPropagation();
             setMouseWorld(screenToCanvas(event.clientX, event.clientY));
-            setConnecting({ nodeId, handleType });
+            setConnecting({ nodeId, handleType, portId });
             connectionTargetNodeIdRef.current = null;
             setConnectionTargetNodeId(null);
+            connectionTargetPortIdRef.current = null;
+            setConnectionTargetPortId(null);
             setSelectedConnectionId(null);
         },
         [screenToCanvas, setConnecting],
     );
 
-    const handleNodeResize = useCallback((nodeId: string, width: number, height: number, position?: Position) => {
-        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, width, height, position: position || node.position } : node)));
-    }, []);
+    const handleNodeResize = useCallback(
+        (nodeId: string, width: number, height: number, position?: Position) => {
+            setNodes((prev) =>
+                prev.map((node) => {
+                    if (node.id !== nodeId) return node;
+                    const resource = runningHubResourceForNode(effectiveConfig, node);
+                    if (!resource) return { ...node, width, height, position: position || node.position };
+                    const workflowScale = Math.max(0.25, width / RUNNING_HUB_WORKFLOW_NODE_WIDTH);
+                    return {
+                        ...node,
+                        width: RUNNING_HUB_WORKFLOW_NODE_WIDTH * workflowScale,
+                        height: runningHubWorkflowCardHeight(resource, Boolean(node.metadata?.runningHubWorkflowPortsOpen), node.metadata?.runningHubWorkflowVisibleFieldKeys) * workflowScale,
+                        position: position || node.position,
+                    };
+                }),
+            );
+        },
+        [effectiveConfig],
+    );
 
     const handleNodeResizeStart = useCallback(() => {
         setIsNodeResizing(true);
@@ -1506,13 +2111,35 @@ function InfiniteCanvasPage() {
     }, []);
 
     const handleNodeContentChange = useCallback((nodeId: string, content: string) => {
+        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, content, texts: node.metadata?.texts?.map((text) => (text.id === node.metadata?.primaryTextId ? { ...text, content } : text)) } } : node)));
+    }, []);
+
+    const handleTextNodeImport = useCallback((nodeId: string, importedContent: string, mode: "replace" | "append") => {
         setNodes((prev) =>
-            prev.map((node) =>
-                node.id === nodeId
-                    ? { ...node, metadata: { ...node.metadata, content, texts: node.metadata?.texts?.map((text) => (text.id === node.metadata?.primaryTextId ? { ...text, content } : text)) } }
-                    : node,
-            ),
+            prev.map((node) => {
+                if (node.id !== nodeId || node.type !== CanvasNodeType.Text) return node;
+                const texts = node.metadata?.texts || [];
+                const primaryTextId = node.metadata?.primaryTextId || texts[0]?.id;
+                const currentContent = texts.find((text) => text.id === primaryTextId)?.content || node.metadata?.content || "";
+                const content = mergeTextNodeImportedContent(currentContent, importedContent, mode);
+                return {
+                    ...node,
+                    metadata: {
+                        ...node.metadata,
+                        content,
+                        texts: texts.map((text) => (text.id === primaryTextId ? { ...text, content } : text)),
+                    },
+                };
+            }),
         );
+    }, []);
+
+    const handleTextNodeTagsChange = useCallback((nodeId: string, textTags: CanvasTextTag[]) => {
+        setNodes((prev) => prev.map((node) => (node.id === nodeId && node.type === CanvasNodeType.Text ? { ...node, metadata: { ...node.metadata, textTags: normalizeCanvasTextTags(textTags) } } : node)));
+    }, []);
+
+    const handleStoryboardChange = useCallback((nodeId: string, storyboardRows: CanvasStoryboardRow[]) => {
+        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, storyboardRows } } : node)));
     }, []);
 
     const handleNodeTitleChange = useCallback((nodeId: string, title: string) => {
@@ -1598,9 +2225,53 @@ function InfiniteCanvasPage() {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt } } : node)));
     }, []);
 
-    const handleConfigNodeChange = useCallback((nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => {
-        setNodes((prev) => prev.map((node) => (node.id === nodeId ? applyNodeConfigPatch(node, patch) : node)));
-    }, []);
+    const handleConfigNodeChange = useCallback(
+        (nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => {
+            const safePatch = patch || {};
+            const node = nodesRef.current.find((item) => item.id === nodeId);
+            if (node) {
+                const mode = node.metadata?.generationMode || (node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : node.type === CanvasNodeType.Text ? "text" : "image");
+                if (safePatch.model) {
+                    if (mode === "image") {
+                        updateConfig("model", safePatch.model);
+                        updateConfig("imageModel", safePatch.model);
+                    } else if (mode === "video") updateConfig("videoModel", safePatch.model);
+                    else if (mode === "audio") updateConfig("audioModel", safePatch.model);
+                    else updateConfig("textModel", safePatch.model);
+                }
+                if (safePatch.size !== undefined) updateConfig("size", safePatch.size);
+                if (safePatch.quality !== undefined) updateConfig("quality", safePatch.quality);
+                if (safePatch.imageResolution !== undefined) updateConfig("imageResolution", safePatch.imageResolution);
+                if (safePatch.background !== undefined) updateConfig("background", safePatch.background);
+                if (safePatch.reasoningEffort !== undefined) updateConfig("reasoningEffort", safePatch.reasoningEffort);
+                if (safePatch.count !== undefined && mode === "image") updateConfig("canvasImageCount", String(getGenerationCount(String(safePatch.count))));
+                if (safePatch.seconds !== undefined) updateConfig("videoSeconds", safePatch.seconds);
+                if (safePatch.vquality !== undefined) updateConfig("vquality", safePatch.vquality);
+                if (safePatch.videoMode !== undefined) updateConfig("videoMode", safePatch.videoMode);
+                if (safePatch.generateAudio !== undefined) updateConfig("videoGenerateAudio", safePatch.generateAudio);
+                if (safePatch.watermark !== undefined) updateConfig("videoWatermark", safePatch.watermark);
+                if (safePatch.audioVoice !== undefined) updateConfig("audioVoice", safePatch.audioVoice);
+                if (safePatch.audioFormat !== undefined) updateConfig("audioFormat", safePatch.audioFormat);
+                if (safePatch.audioSpeed !== undefined) updateConfig("audioSpeed", safePatch.audioSpeed);
+                if (safePatch.audioInstructions !== undefined) updateConfig("audioInstructions", safePatch.audioInstructions);
+            }
+            setNodes((prev) =>
+                prev.map((item) => {
+                    if (item.id !== nodeId) return item;
+                    const next = applyNodeConfigPatch(item, safePatch);
+                    const selectedModel = safePatch.model || next.metadata?.model;
+                    const resource = selectedModel ? findChannelModel(effectiveConfig, selectedModel)?.model.runningHub : undefined;
+                    if (next.type !== CanvasNodeType.Config || !resource || !["workflow", "app"].includes(resource.kind)) return next;
+                    const workflowScale = runningHubWorkflowContentScale(next);
+                    const width = RUNNING_HUB_WORKFLOW_NODE_WIDTH * workflowScale;
+                    const height = runningHubWorkflowCardHeight(resource, Boolean(next.metadata?.runningHubWorkflowPortsOpen), next.metadata?.runningHubWorkflowVisibleFieldKeys) * workflowScale;
+                    if (next.width === width && next.height === height) return next;
+                    return { ...next, width, height, position: { x: next.position.x + next.width / 2 - width / 2, y: next.position.y + next.height / 2 - height / 2 } };
+                }),
+            );
+        },
+        [effectiveConfig, updateConfig],
+    );
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
@@ -1705,7 +2376,11 @@ function InfiniteCanvasPage() {
             const configSpec = NODE_DEFAULT_SIZE[CanvasNodeType.Config];
             const centerY = node.position.y + node.height / 2;
             const textNode = {
-                ...createCanvasNode(CanvasNodeType.Text, { x: node.position.x + node.width + gap + textSpec.width / 2, y: centerY }, { content: t("canvas.projectPage.reversePreset"), prompt: t("canvas.projectPage.reversePreset"), status: NODE_STATUS_SUCCESS, fontSize: 14 }),
+                ...createCanvasNode(
+                    CanvasNodeType.Text,
+                    { x: node.position.x + node.width + gap + textSpec.width / 2, y: centerY },
+                    { content: t("canvas.projectPage.reversePreset"), prompt: t("canvas.projectPage.reversePreset"), status: NODE_STATUS_SUCCESS, fontSize: 26 },
+                ),
                 title: t("canvas.projectPage.reverseTitle"),
             };
             const configNode = {
@@ -1732,6 +2407,49 @@ function InfiniteCanvasPage() {
         [effectiveConfig.model, effectiveConfig.textModel, message, t],
     );
 
+    const analyzeVideoWithSkill = useCallback(
+        (node: CanvasNodeData) => {
+            if (node.type !== CanvasNodeType.Text) {
+                message.warning("请从文本生成节点执行拆解视频");
+                return;
+            }
+            const references = buildNodeMentionReferences(node, nodesRef.current, connectionsRef.current);
+            const videoReference = references.find((reference) => reference.kind === "video");
+            if (!videoReference) {
+                message.warning("请先将视频节点连接到文本生成节点");
+                return;
+            }
+            const videoNode = nodesRef.current.find((item) => item.id === videoReference.nodeId);
+            if (!videoNode?.metadata?.content) {
+                message.warning("连接的视频节点还没有可读取的视频");
+                return;
+            }
+            if (!localAgentConnected) {
+                openAgentPanel();
+                message.warning("请先连接本地 Agent，再使用拆解视频");
+                return;
+            }
+            const skill = useAgentSkillStore.getState().skills.find((item) => item.enabled && (item.name === "remix-reference-video-prompt" || item.path.endsWith("/remix-reference-video-prompt/SKILL.md")));
+            if (!skill) {
+                useAgentStore.getState().setAgentState({ activeTab: "skills" });
+                openAgentPanel();
+                message.warning("请先在 Agent 技能列表中启用 remix-reference-video-prompt");
+                return;
+            }
+            const prompt = [
+                "请使用 remix-reference-video-prompt 技能，以 deconstruct_only 模式分析引用的视频节点。",
+                "按 Skill 要求提取时间轴、镜头、机位、运镜、构图、动作、转场、字幕、声音和视觉元素；无法从视频证据确认的内容必须标记为未知，不要臆测。",
+                `分析完成后必须调用 canvas_update_node_text，更新当前文本生成节点 id=${node.id}，标题设为“拆解视频”，并将完整的结构化镜头拆解原样写入 text。`,
+                "不要创建新的文本节点、配置节点或图片；不要只在 Agent 对话中回复；完成后在对话中简短确认即可。",
+            ].join("\n");
+            useAgentSkillStore.getState().selectSkill(skill, prompt);
+            useAgentStore.getState().setAgentState({ activeTab: "chat", canvasReferences: references, autoSubmitPrompt: true });
+            useAgentStore.getState().closePanel();
+            setContextMenu(null);
+        },
+        [connectionsRef, localAgentConnected, message, nodesRef, openAgentPanel, setContextMenu, t],
+    );
+
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
         if (!node.metadata?.content) return;
         const cropped = await cropDataUrl(node.metadata.content, crop);
@@ -1741,7 +2459,7 @@ function InfiniteCanvasPage() {
         const child: CanvasNodeData = {
             id: childId,
             type: CanvasNodeType.Image,
-            title: "Cropped Image",
+            title: generatedImageTitle(childId),
             position: { x: node.position.x + node.width + 96, y: node.position.y },
             width,
             height: width * (image.height / image.width),
@@ -1774,7 +2492,7 @@ function InfiniteCanvasPage() {
                     return {
                         id,
                         type: CanvasNodeType.Image,
-                        title: t("canvas.projectPage.splitTitle", { name: node.title || t("assets.kinds.image"), row: piece.row + 1, column: piece.column + 1 }),
+                        title: generatedImageTitle(id),
                         position: { x: startX + piece.column * (cellWidth + gap), y: startY + piece.row * (cellHeight + gap) },
                         width: cellWidth,
                         height: cellHeight,
@@ -1828,18 +2546,14 @@ function InfiniteCanvasPage() {
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
-                    title: userPrompt.slice(0, 32) || t("canvas.projectPage.maskResult"),
+                    title: generatedImageTitle(childId),
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
                     width: node.width,
                     height: node.height,
                     metadata: childMetadata,
                 },
             ]);
-            setConnections((prev) => [
-                ...prev,
-                { id: nanoid(), fromNodeId: node.id, toNodeId: childId },
-                { id: nanoid(), fromNodeId: maskNodeId, toNodeId: childId },
-            ]);
+            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }, { id: nanoid(), fromNodeId: maskNodeId, toNodeId: childId }]);
             setSelectedNodeIds(new Set([childId]));
             setSelectedConnectionId(null);
             setDialogNodeId(childId);
@@ -1869,12 +2583,12 @@ function InfiniteCanvasPage() {
         setUpscaleNodeId(null);
         const upscaled = await upscaleDataUrl(node.metadata.content, params);
         const image = await uploadImage(upscaled);
-        const size = fitNodeSize(image.width, image.height);
+        const size = fitImageNodeSize(image.width, image.height);
         const childId = nanoid();
         const child: CanvasNodeData = {
             id: childId,
             type: CanvasNodeType.Image,
-            title: "Upscaled Image",
+            title: generatedImageTitle(childId),
             position: { x: node.position.x + node.width + 96, y: node.position.y },
             width: size.width,
             height: size.height,
@@ -1889,6 +2603,105 @@ function InfiniteCanvasPage() {
         setDialogNodeId(childId);
     }, []);
 
+    const openSeedVrUpscale = useCallback(
+        (node: CanvasNodeData) => {
+            if (!node.metadata?.content) return;
+            const resource = seedVrUpscaleModel?.model.runningHub;
+            if (!seedVrUpscaleModel || !resource) {
+                message.warning(t("canvas.projectPage.seedVrUpscaleUnavailable"));
+                return;
+            }
+            if (!seedVrUpscaleImageBindings(resource).length) {
+                message.error(t("canvas.projectPage.seedVrUpscaleInputMissing"));
+                return;
+            }
+            const defaultPixel = seedVrUpscalePixelField(resource)?.defaultValue;
+            setSeedVrUpscalePixel(typeof defaultPixel === "string" || typeof defaultPixel === "number" ? defaultPixel : RUNNING_HUB_SEEDVR_DEFAULT_PIXEL);
+            setSeedVrUpscaleInstanceType("plus");
+            setSeedVrUpscaleNodeId(node.id);
+        },
+        [message, seedVrUpscaleModel, t],
+    );
+
+    const runSeedVrUpscale = useCallback(
+        async (node: CanvasNodeData, pixel: string | number, instanceType: RunningHubWorkflowInstanceType) => {
+            if (!node.metadata?.content) return;
+            const resource = seedVrUpscaleModel?.model.runningHub;
+            const imageBindings = seedVrUpscaleImageBindings(resource);
+            if (!seedVrUpscaleModel || !resource) {
+                message.warning(t("canvas.projectPage.seedVrUpscaleUnavailable"));
+                return;
+            }
+            if (!imageBindings.length) {
+                message.error(t("canvas.projectPage.seedVrUpscaleInputMissing"));
+                return;
+            }
+
+            const seedVrModel = encodeChannelModel(seedVrUpscaleModel.channel.id, seedVrUpscaleModel.model.name);
+            const generationConfig = {
+                ...buildGenerationConfig(effectiveConfig, node, "image"),
+                model: seedVrModel,
+                imageModel: seedVrModel,
+                count: "1",
+                runningHubWorkflowValues: { [RUNNING_HUB_SEEDVR_PIXEL_FIELD_KEY]: pixel },
+            };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+
+            setSeedVrUpscaleNodeId(null);
+            const childId = nanoid();
+            const prompt = t("canvas.projectPage.seedVrUpscale");
+            const references = [
+                {
+                    id: node.id,
+                    name: `${node.title || node.id}.png`,
+                    type: node.metadata.mimeType || "image/png",
+                    dataUrl: node.metadata.content,
+                    storageKey: node.metadata.storageKey,
+                },
+            ];
+            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, references);
+            setRunningNodeId(childId);
+            setNodes((prev) => [
+                ...prev,
+                {
+                    id: childId,
+                    type: CanvasNodeType.Image,
+                    title: prompt,
+                    position: { x: node.position.x + node.width + 96, y: node.position.y },
+                    width: node.width,
+                    height: node.height,
+                    metadata: { prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
+                },
+            ]);
+            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
+            setSelectedNodeIds(new Set([childId]));
+            setSelectedConnectionId(null);
+            const controller = startGenerationRequest(childId, node.id, childId);
+            try {
+                const image = await requestEdit(generationConfig, prompt, references, {
+                    signal: controller.signal,
+                    runningHubWorkflowBindings: { image: imageBindings, video: [], audio: [] },
+                    runningHubWorkflowRunOptions: { instanceType },
+                }).then((items) => items[0]);
+                const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
+                const size = fitImageNodeSize(uploaded.width, uploaded.height);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.seedVrUpscaleFailed");
+                message.error(errorDetails);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+            } finally {
+                finishGenerationRequest(childId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, seedVrUpscaleModel, startGenerationRequest, t],
+    );
+
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
@@ -1899,7 +2712,6 @@ function InfiniteCanvasPage() {
             }
             const childId = nanoid();
             const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
-            const title = buildAngleLabel(params);
             const prompt = buildAnglePrompt(params);
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [
                 { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey },
@@ -1911,7 +2723,7 @@ function InfiniteCanvasPage() {
                 {
                     id: childId,
                     type: CanvasNodeType.Image,
-                    title,
+                    title: generatedImageTitle(childId),
                     position: { x: node.position.x + node.width + 96, y: node.position.y },
                     width: imageConfig.width,
                     height: imageConfig.height,
@@ -1923,14 +2735,11 @@ function InfiniteCanvasPage() {
             setDialogNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
-                const image = await requestEdit(
-                    generationConfig,
-                    prompt,
-                    [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }],
-                    { signal: controller.signal },
-                ).then((items) => items[0]);
+                const image = await requestEdit(generationConfig, prompt, [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }], {
+                    signal: controller.signal,
+                }).then((items) => items[0]);
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
-                const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
+                const size = fitImageNodeSize(uploaded.width, uploaded.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
@@ -1944,6 +2753,61 @@ function InfiniteCanvasPage() {
         [effectiveConfig, finishGenerationRequest, openConfigDialog, startGenerationRequest, t],
     );
 
+    const generatePersonAdjustmentNode = useCallback(
+        async (node: CanvasNodeData, params: CanvasImagePersonAdjustParams) => {
+            if (!node.metadata?.content) return;
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+            const childId = nanoid();
+            const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
+            const prompt =
+                params.mode === "emotion"
+                    ? `基于参考图保持人物身份、姿态、服装、背景和光线一致，只调整角色${params.faceIndex + 1}的面部表情：${params.emotion}，情绪强度 ${params.intensity}/100。`
+                    : `基于参考图保持人物身份、姿态和构图一致，只进行质感调整：人景融合为${params.texture.sceneBlend}，光影融合为${params.texture.lightBlend}，皮肤为${params.texture.skin}，纹理为${params.texture.texture}，锐度为${params.texture.sharpness}。`;
+            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [
+                { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey },
+            ]);
+            setPersonNodeId(null);
+            setRunningNodeId(childId);
+            setNodes((prev) => [
+                ...prev,
+                {
+                    id: childId,
+                    type: CanvasNodeType.Image,
+                    title: generatedImageTitle(childId),
+                    position: { x: node.position.x + node.width + 96, y: node.position.y },
+                    width: imageConfig.width,
+                    height: imageConfig.height,
+                    metadata: { prompt, status: NODE_STATUS_LOADING, ...generationMetadata },
+                },
+            ]);
+            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
+            setSelectedNodeIds(new Set([childId]));
+            setDialogNodeId(childId);
+            const controller = startGenerationRequest(childId, node.id, childId);
+            try {
+                const image = await requestEdit(generationConfig, prompt, [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }], {
+                    signal: controller.signal,
+                }).then((items) => items[0]);
+                const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
+                const size = fitImageNodeSize(uploaded.width, uploaded.height);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
+                message.error(errorDetails);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+            } finally {
+                finishGenerationRequest(childId, controller);
+                setRunningNodeId(null);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+    );
+
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, fontSize } } : node)));
     }, []);
@@ -1955,9 +2819,7 @@ function InfiniteCanvasPage() {
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
-            const files = Array.from(event.target.files || []).filter(
-                (f) => f.type.startsWith("image/") || f.type.startsWith("video/") || isAudioFile(f),
-            );
+            const files = Array.from(event.target.files || []).filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/") || isAudioFile(f));
             if (!files.length) {
                 uploadTargetRef.current = null;
                 event.target.value = "";
@@ -1965,12 +2827,7 @@ function InfiniteCanvasPage() {
             }
 
             const target = uploadTargetRef.current;
-            const basePosition =
-                target?.position ||
-                screenToCanvas(
-                    (containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2,
-                    (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2,
-                );
+            const basePosition = target?.position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
             const STAGGER = 40; // Offset between multiple imported files.
 
             // When replacing a target node, use the first file as the replacement and create the rest nearby.
@@ -2020,7 +2877,7 @@ function InfiniteCanvasPage() {
                     setSelectedConnectionId(null);
                 } else {
                     const image = await uploadImage(first);
-                    const s = fitNodeSize(image.width, image.height);
+                    const s = fitImageNodeSize(image.width, image.height);
                     setNodes((prev) =>
                         prev.map((node) =>
                             node.id === target.nodeId
@@ -2088,26 +2945,38 @@ function InfiniteCanvasPage() {
     const handleDrop = useCallback(
         (event: ReactDragEvent<HTMLDivElement>) => {
             event.preventDefault();
-            const files = Array.from(event.dataTransfer.files).filter(
-                (item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item),
-            );
-            if (!files.length) return;
+            const files = canvasDroppedMediaFiles(event.dataTransfer);
+            if (!files.length) {
+                message.warning("未读取到可用的图片、视频或音频文件");
+                return;
+            }
 
+            const preparedFiles = files.map(({ file, kind }) => ({
+                kind,
+                file: kind === "image" ? normalizeCanvasDroppedFile(file, kind) : Promise.resolve(file),
+            }));
             const basePos = screenToCanvas(event.clientX, event.clientY);
             const STAGGER = 40;
-            for (let i = 0; i < files.length; i++) {
-                const pos = { x: basePos.x + i * STAGGER, y: basePos.y + i * STAGGER };
-                const f = files[i];
-                if (isAudioFile(f)) {
-                    void createAudioFileNode(f, pos);
-                } else if (f.type.startsWith("video/")) {
-                    void createVideoFileNode(f, pos);
-                } else {
-                    void createImageFileNode(f, pos);
+            void (async () => {
+                for (let i = 0; i < preparedFiles.length; i++) {
+                    const pos = { x: basePos.x + i * STAGGER, y: basePos.y + i * STAGGER };
+                    const { file, kind } = preparedFiles[i];
+                    try {
+                        const preparedFile = await file;
+                        if (kind === "audio") await createAudioFileNode(preparedFile, pos);
+                        else if (kind === "video") await createVideoFileNode(preparedFile, pos);
+                        else await createImageFileNode(preparedFile, pos);
+                    } catch (error) {
+                        if (error instanceof Error && error.name === "NotReadableError") {
+                            message.error("微信图片临时文件无法读取。请在 macOS“隐私与安全性”中允许 Google Chrome 访问文件，或复制图片后按 ⌘V 导入。");
+                        } else {
+                            message.error(error instanceof Error ? error.message : "文件读取失败，请先保存到本地后再拖入");
+                        }
+                    }
                 }
-            }
+            })();
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, message, screenToCanvas],
     );
 
     const startTitleEditing = useCallback(() => {
@@ -2148,10 +3017,11 @@ function InfiniteCanvasPage() {
                 try {
                     const fullPrompt = (builtinPanel.promptPrefix || "") + scene;
                     const context = await hydrateNodeGenerationContext(buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, fullPrompt));
-                    const refs = context.referenceImages;
+                    const enhancedContext = { ...context, prompt: composeCanvasCreativePrompt(context.prompt, sourceNode.metadata?.creativePresets, mode) };
+                    const refs = enhancedContext.referenceImages;
                     const image = refs.length
-                        ? await requestEdit({ ...generationConfig, count: "1" }, context.prompt, refs, { signal: controller.signal }).then((items) => items[0])
-                        : await requestGeneration({ ...generationConfig, count: "1" }, context.prompt, { signal: controller.signal }).then((items) => items[0]);
+                        ? await requestEdit({ ...generationConfig, count: "1" }, enhancedContext.prompt, refs, { signal: controller.signal }).then((items) => items[0])
+                        : await requestGeneration({ ...generationConfig, count: "1" }, enhancedContext.prompt, { signal: controller.signal }).then((items) => items[0]);
                     const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                     setNodes((prev) =>
                         prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
@@ -2173,9 +3043,14 @@ function InfiniteCanvasPage() {
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
-                buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt),
+            const initialPrompt = editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt;
+            const runningHub = findChannelModel(generationConfig, generationConfig.model)?.model.runningHub;
+            const rawGenerationContext = await hydrateNodeGenerationContext(
+                sourceNode?.type === CanvasNodeType.Config && runningHub && ["workflow", "app"].includes(runningHub.kind)
+                    ? buildRunningHubWorkflowGenerationContext(nodeId, nodesRef.current, connectionsRef.current, initialPrompt, runningHub)
+                    : buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, initialPrompt),
             );
+            const generationContext = { ...rawGenerationContext, prompt: composeCanvasCreativePrompt(rawGenerationContext.prompt, sourceNode?.metadata?.creativePresets, mode) };
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
@@ -2189,7 +3064,8 @@ function InfiniteCanvasPage() {
                 return;
             }
             let pendingChildIds: string[] = [];
-            if (markSourceStatus) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...(node.type === CanvasNodeType.Config ? {} : { prompt }), status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
+            if (markSourceStatus)
+                setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...(node.type === CanvasNodeType.Config ? {} : { prompt }), status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
 
             try {
                 if (mode === "image") {
@@ -2213,7 +3089,7 @@ function InfiniteCanvasPage() {
                     const rootNode: CanvasNodeData = {
                         id: rootId,
                         type: CanvasNodeType.Image,
-                        title: effectivePrompt.slice(0, 32) || "Generated Image",
+                        title: generatedImageTitle(rootId),
                         position: {
                             x: isEmptyImageNode ? parentPosition.x : parentPosition.x + parentConfig.width + 96,
                             y: parentPosition.y + parentConfig.height / 2 - imageConfig.height / 2,
@@ -2256,7 +3132,7 @@ function InfiniteCanvasPage() {
                                               title: prompt.slice(0, 32) || "Prompt",
                                               width: parentConfig.width,
                                               height: parentConfig.height,
-                                              metadata: { ...node.metadata, content: prompt, prompt, status: NODE_STATUS_SUCCESS, fontSize: 14, errorDetails: undefined },
+                                              metadata: { ...node.metadata, content: prompt, prompt, status: NODE_STATUS_SUCCESS, fontSize: 26, errorDetails: undefined },
                                           }
                                 : node,
                         ),
@@ -2274,12 +3150,22 @@ function InfiniteCanvasPage() {
                     await Promise.all(
                         imageIds.map(async (imageId) => {
                             try {
+                                const runningHubOptions = { signal: controller.signal, runningHubWorkflowBindings: generationContext.runningHubWorkflowBindings, runningHubWorkflowRunOptions: generationContext.runningHubWorkflowRunOptions };
                                 const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
+                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, runningHubOptions).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, runningHubOptions).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
-                                const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                                const item: CanvasNodeImage = { id: imageId, status: NODE_STATUS_SUCCESS, content: uploaded.url, storageKey: uploaded.storageKey, naturalWidth: uploaded.width, naturalHeight: uploaded.height, bytes: uploaded.bytes, mimeType: uploaded.mimeType };
+                                const imageSize = fitImageNodeSize(uploaded.width, uploaded.height);
+                                const item: CanvasNodeImage = {
+                                    id: imageId,
+                                    status: NODE_STATUS_SUCCESS,
+                                    content: uploaded.url,
+                                    storageKey: uploaded.storageKey,
+                                    naturalWidth: uploaded.width,
+                                    naturalHeight: uploaded.height,
+                                    bytes: uploaded.bytes,
+                                    mimeType: uploaded.mimeType,
+                                };
                                 setNodes((prev) =>
                                     prev.map((node) => {
                                         if (node.id !== rootId) return node;
@@ -2312,7 +3198,11 @@ function InfiniteCanvasPage() {
                                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                                 if (!firstError) firstError = errorDetails;
                                 hasFailure = true;
-                                setNodes((prev) => prev.map((node) => (node.id === rootId ? { ...node, metadata: { ...node.metadata, images: node.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)) } } : node)));
+                                setNodes((prev) =>
+                                    prev.map((node) =>
+                                        node.id === rootId ? { ...node, metadata: { ...node.metadata, images: node.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)) } } : node,
+                                    ),
+                                );
                             }
                             return false;
                         }),
@@ -2331,7 +3221,7 @@ function InfiniteCanvasPage() {
                                 ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : t("canvas.projectPage.generationFailed") } }
                                 : node.id === rootId
                                   ? { ...node, metadata: { ...node.metadata, status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: hasSuccess ? undefined : t("canvas.projectPage.allFailed") } }
-                                    : node,
+                                  : node,
                         ),
                     );
                     return;
@@ -2356,6 +3246,7 @@ function InfiniteCanvasPage() {
                             size: generationConfig.size,
                             seconds: generationConfig.videoSeconds,
                             vquality: generationConfig.vquality,
+                            videoMode: generationConfig.videoMode,
                             generateAudio: generationConfig.videoGenerateAudio,
                             watermark: generationConfig.videoWatermark,
                             references: generationReferenceUrls(generationContext),
@@ -2370,31 +3261,29 @@ function InfiniteCanvasPage() {
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
                     const controller = startGenerationRequest(videoId, nodeId, nodeId, runController);
                     try {
-                        const video = await storeGeneratedVideo(
-                            await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, { signal: controller.signal }),
-                        );
-                        const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                        const task = await createVideoGenerationTask(generationConfig, effectivePrompt, generationContext.referenceImages, {
+                            signal: controller.signal,
+                            referenceVideos: generationContext.referenceVideos,
+                            referenceAudios: generationContext.referenceAudios,
+                            runningHubWorkflowBindings: generationContext.runningHubWorkflowBindings,
+                            runningHubWorkflowRunOptions: generationContext.runningHubWorkflowRunOptions,
+                        });
+                        if (task.provider === "openai") setNodes((prev) => prev.map((node) => (node.id === videoId ? { ...node, metadata: { ...node.metadata, videoTaskId: task.id, videoTaskProvider: "openai" } } : node)));
+                        const video = await storeGeneratedVideo(await waitForVideoGenerationTask(generationConfig, task, { signal: controller.signal }));
                         setNodes((prev) =>
                             prev.map((node) =>
                                 node.id === videoId
-                                    ? {
-                                          ...node,
-                                          width: videoSize.width,
-                                          height: videoSize.height,
-                                          position: { x: node.position.x + node.width / 2 - videoSize.width / 2, y: node.position.y + node.height / 2 - videoSize.height / 2 },
-                                          metadata: {
-                                              ...node.metadata,
-                                              ...videoMetadata(video),
-                                              prompt: effectivePrompt,
-                                              model: generationConfig.model,
-                                              size: generationConfig.size,
-                                              seconds: generationConfig.videoSeconds,
-                                              vquality: generationConfig.vquality,
-                                              generateAudio: generationConfig.videoGenerateAudio,
-                                              watermark: generationConfig.videoWatermark,
-                                              references: generationReferenceUrls(generationContext),
-                                          },
-                                      }
+                                    ? applyGeneratedVideo(node, video, {
+                                          prompt: effectivePrompt,
+                                          model: generationConfig.model,
+                                          size: generationConfig.size,
+                                          seconds: generationConfig.videoSeconds,
+                                          vquality: generationConfig.vquality,
+                                          videoMode: generationConfig.videoMode,
+                                          generateAudio: generationConfig.videoGenerateAudio,
+                                          watermark: generationConfig.videoWatermark,
+                                          references: generationReferenceUrls(generationContext),
+                                      })
                                     : node,
                             ),
                         );
@@ -2427,7 +3316,14 @@ function InfiniteCanvasPage() {
                     if (!isEmptyAudioNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
                     const controller = startGenerationRequest(audioId, nodeId, nodeId, runController);
                     try {
-                        const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, effectivePrompt, { signal: controller.signal }), generationConfig.audioFormat);
+                        const audio = await storeGeneratedAudio(
+                            await requestAudioGeneration(generationConfig, effectivePrompt, {
+                                signal: controller.signal,
+                                runningHubWorkflowBindings: generationContext.runningHubWorkflowBindings,
+                                runningHubWorkflowRunOptions: generationContext.runningHubWorkflowRunOptions,
+                            }),
+                            generationConfig.audioFormat,
+                        );
                         setNodes((prev) => prev.map((node) => (node.id === audioId ? { ...node, metadata: { ...node.metadata, ...audioMetadata(audio), prompt: effectivePrompt, ...buildAudioGenerationMetadata(generationConfig) } } : node)));
                     } finally {
                         finishGenerationRequest(audioId, controller);
@@ -2446,14 +3342,15 @@ function InfiniteCanvasPage() {
                 const rootNode: CanvasNodeData = {
                     id: rootId,
                     type: CanvasNodeType.Text,
-                    title: effectivePrompt.slice(0, 32) || "Generated Text",
+                    title: sourceNode?.metadata?.storyboardMode ? t("canvas.createMenu.storyboard") : effectivePrompt.slice(0, 32) || "Generated Text",
                     position: isEmptyTextNode ? sourceNode.position : { x: parentPosition.x + parentConfig.width + 96, y: parentPosition.y + parentConfig.height / 2 - textConfig.height / 2 },
                     width: isEmptyTextNode ? sourceNode.width : textConfig.width,
                     height: isEmptyTextNode ? sourceNode.height : textConfig.height,
                     metadata: {
                         prompt: effectivePrompt,
                         status: NODE_STATUS_LOADING,
-                        fontSize: 14,
+                        fontSize: 26,
+                        ...(sourceNode?.metadata?.storyboardMode ? { storyboardMode: true, storyboardRows: sourceNode.metadata.storyboardRows || [] } : {}),
                         model: generationConfig.model,
                         reasoningEffort: generationConfig.reasoningEffort,
                         textCount,
@@ -2518,7 +3415,9 @@ function InfiniteCanvasPage() {
                         } catch (error) {
                             if (isGenerationCanceled(error)) return null;
                             const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
-                            setNodes((prev) => prev.map((node) => (node.id === rootId ? { ...node, metadata: { ...node.metadata, texts: node.metadata?.texts?.map((item) => (item.id === textId ? { ...item, status: NODE_STATUS_ERROR, errorDetails } : item)) } } : node)));
+                            setNodes((prev) =>
+                                prev.map((node) => (node.id === rootId ? { ...node, metadata: { ...node.metadata, texts: node.metadata?.texts?.map((item) => (item.id === textId ? { ...item, status: NODE_STATUS_ERROR, errorDetails } : item)) } } : node)),
+                            );
                             return { id: textId, status: NODE_STATUS_ERROR, content: "", errorDetails } satisfies CanvasNodeText;
                         }
                     }),
@@ -2541,12 +3440,15 @@ function InfiniteCanvasPage() {
                                     content: primaryText?.content || "",
                                     texts: completedTexts,
                                     primaryTextId: primaryText?.id,
+                                    ...(node.metadata?.storyboardMode && primaryText?.content ? { storyboardRows: mergeStoryboardRows(node.metadata.storyboardRows || [], primaryText.content) } : {}),
                                     status: primaryText ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
                                     errorDetails: primaryText ? undefined : t("canvas.projectPage.generationFailed"),
                                 },
                             };
                         }
-                        return node.id === nodeId && isConfigNode ? { ...node, metadata: { ...node.metadata, status: firstText ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: firstText ? undefined : t("canvas.projectPage.generationFailed") } } : node;
+                        return node.id === nodeId && isConfigNode
+                            ? { ...node, metadata: { ...node.metadata, status: firstText ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: firstText ? undefined : t("canvas.projectPage.generationFailed") } }
+                            : node;
                     }),
                 );
             } catch (error) {
@@ -2554,7 +3456,13 @@ function InfiniteCanvasPage() {
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                 message.error(errorDetails);
                 setNodes((prev) =>
-                    prev.map((node) => (node.id === nodeId || pendingChildIds.includes(node.id) ? (node.id === nodeId && !markSourceStatus ? node : { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } }) : node)),
+                    prev.map((node) =>
+                        node.id === nodeId || pendingChildIds.includes(node.id)
+                            ? node.id === nodeId && !markSourceStatus
+                                ? node
+                                : { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails, ...(isVideoTaskFailed(error) ? { videoTaskId: undefined, videoTaskProvider: undefined } : {}) } }
+                            : node,
+                    ),
                 );
             } finally {
                 finishGenerationRequest(nodeId, runController);
@@ -2569,6 +3477,10 @@ function InfiniteCanvasPage() {
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData, imageId?: string) => {
+            if (hasResumableVideoTask(node)) {
+                await pollVideoNodeTask(node);
+                return;
+            }
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? node.metadata : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
@@ -2600,13 +3512,41 @@ function InfiniteCanvasPage() {
                 hasSavedImageMetadata && savedImageMetadata ? await resolveMetadataReferences(savedImageMetadata) : useReferenceImages ? (context?.referenceImages.length ? context.referenceImages : sourceNodeReferenceImages(sourceNode)) : [];
             if (useReferenceImages && !retryReferenceImages) {
                 message.error(t("canvas.projectPage.referenceMissing"));
-                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: item.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: item.metadata?.content ? undefined : t("canvas.projectPage.referenceMissing"), images: item.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails: t("canvas.projectPage.referenceMissing") } : image)) } } : item)));
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      status: item.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
+                                      errorDetails: item.metadata?.content ? undefined : t("canvas.projectPage.referenceMissing"),
+                                      images: item.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails: t("canvas.projectPage.referenceMissing") } : image)),
+                                  },
+                              }
+                            : item,
+                    ),
+                );
                 return;
             }
             const retryImages = retryReferenceImages || [];
 
             setRunningNodeId(node.id);
-            setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, images: item.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_LOADING, errorDetails: undefined } : image)) } } : item)));
+            setNodes((prev) =>
+                prev.map((item) =>
+                    item.id === node.id
+                        ? {
+                              ...item,
+                              metadata: {
+                                  ...item.metadata,
+                                  status: NODE_STATUS_LOADING,
+                                  errorDetails: undefined,
+                                  images: item.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_LOADING, errorDetails: undefined } : image)),
+                              },
+                          }
+                        : item,
+                ),
+            );
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
 
             try {
@@ -2626,28 +3566,26 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, { signal: controller.signal }));
-                    const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                    const task = await createVideoGenerationTask(generationConfig, prompt, retryImages, {
+                        signal: controller.signal,
+                        referenceVideos: context?.referenceVideos || [],
+                        referenceAudios: context?.referenceAudios || [],
+                    });
+                    if (task.provider === "openai") setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskProvider: "openai" } } : item)));
+                    const video = await storeGeneratedVideo(await waitForVideoGenerationTask(generationConfig, task, { signal: controller.signal }));
                     setNodes((prev) =>
                         prev.map((item) =>
                             item.id === node.id
-                                ? {
-                                      ...item,
-                                      width: videoSize.width,
-                                      height: videoSize.height,
-                                      position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
-                                      metadata: {
-                                          ...item.metadata,
-                                          ...videoMetadata(video),
-                                          prompt,
-                                          model: generationConfig.model,
-                                          size: generationConfig.size,
-                                          seconds: generationConfig.videoSeconds,
-                                          vquality: generationConfig.vquality,
-                                          generateAudio: generationConfig.videoGenerateAudio,
-                                          watermark: generationConfig.videoWatermark,
-                                      },
-                                  }
+                                ? applyGeneratedVideo(item, video, {
+                                      prompt,
+                                      model: generationConfig.model,
+                                      size: generationConfig.size,
+                                      seconds: generationConfig.videoSeconds,
+                                      vquality: generationConfig.vquality,
+                                      videoMode: generationConfig.videoMode,
+                                      generateAudio: generationConfig.videoGenerateAudio,
+                                      watermark: generationConfig.videoWatermark,
+                                  })
                                 : item,
                         ),
                     );
@@ -2690,11 +3628,14 @@ function InfiniteCanvasPage() {
                         if (item.id !== node.id) return item;
                         const makePrimary = !imageId || !item.metadata?.content;
                         const edge = imageId ? Math.max(item.width, item.height) : 0;
-                        const imageSize = imageId && item.metadata?.freeResize ? { width: item.width, height: item.height } : imageId ? fitNodeSize(uploadedImage.width, uploadedImage.height, edge, edge) : fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
+                        const imageSize =
+                            imageId && item.metadata?.freeResize ? { width: item.width, height: item.height } : imageId ? fitNodeSize(uploadedImage.width, uploadedImage.height, edge, edge) : fitImageNodeSize(uploadedImage.width, uploadedImage.height);
                         return {
                             ...item,
                             type: CanvasNodeType.Image,
-                            ...(makePrimary ? { width: imageSize.width, height: imageSize.height, ...(imageId ? { position: { x: item.position.x + item.width / 2 - imageSize.width / 2, y: item.position.y + item.height / 2 - imageSize.height / 2 } } : {}) } : {}),
+                            ...(makePrimary
+                                ? { width: imageSize.width, height: imageSize.height, ...(imageId ? { position: { x: item.position.x + item.width / 2 - imageSize.width / 2, y: item.position.y + item.height / 2 - imageSize.height / 2 } } : {}) }
+                                : {}),
                             metadata: {
                                 ...item.metadata,
                                 ...(makePrimary ? imageMetadata(uploadedImage) : { status: NODE_STATUS_SUCCESS }),
@@ -2710,13 +3651,28 @@ function InfiniteCanvasPage() {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                 message.error(errorDetails);
-                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: item.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR, errorDetails: item.metadata?.content ? undefined : errorDetails, images: item.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)) } } : item)));
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      status: item.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
+                                      errorDetails: item.metadata?.content ? undefined : errorDetails,
+                                      ...(isVideoTaskFailed(error) ? { videoTaskId: undefined, videoTaskProvider: undefined } : {}),
+                                      images: item.metadata?.images?.map((image) => (image.id === imageId ? { ...image, status: NODE_STATUS_ERROR, errorDetails } : image)),
+                                  },
+                              }
+                            : item,
+                    ),
+                );
             } finally {
                 finishGenerationRequest(node.id, controller);
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, pollVideoNodeTask, startGenerationRequest, t],
     );
 
     const deleteBatchImage = useCallback((nodeId: string, imageId: string) => {
@@ -2752,7 +3708,10 @@ function InfiniteCanvasPage() {
                 {
                     prompt: "",
                     model: effectiveConfig.imageModel || effectiveConfig.model,
+                    quality: effectiveConfig.quality,
+                    imageResolution: effectiveConfig.imageResolution,
                     size: effectiveConfig.size,
+                    background: effectiveConfig.background,
                     count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
                 },
             );
@@ -2767,20 +3726,20 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, t],
+        [effectiveConfig.background, effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.imageResolution, effectiveConfig.model, effectiveConfig.quality, effectiveConfig.size, message, t],
     );
 
     const insertAssistantImage = useCallback(
         async (image: CanvasAssistantImage) => {
             const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
-            const config = fitNodeSize(meta.width, meta.height);
+            const config = fitImageNodeSize(meta.width, meta.height);
             const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
             const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             const node: CanvasNodeData = {
                 id,
                 type: CanvasNodeType.Image,
-                title: image.prompt.slice(0, 32) || "Generated Image",
+                title: generatedImageTitle(id),
                 position: { x: center.x - config.width / 2, y: center.y - config.height / 2 },
                 width: config.width,
                 height: config.height,
@@ -2855,6 +3814,34 @@ function InfiniteCanvasPage() {
         setPreviewNodeId(node.id);
         setPreviewImageId(imageId || null);
     }, []);
+    const setImagePreviewZoom = useCallback((nextZoom: number) => {
+        const zoom = Math.max(IMAGE_PREVIEW_MIN_ZOOM, Math.min(IMAGE_PREVIEW_MAX_ZOOM, nextZoom));
+        setPreviewZoom(zoom);
+        if (zoom === IMAGE_PREVIEW_MIN_ZOOM) setPreviewOffset({ x: 0, y: 0 });
+    }, []);
+    const resetImagePreview = useCallback(() => {
+        setPreviewZoom(IMAGE_PREVIEW_MIN_ZOOM);
+        setPreviewOffset({ x: 0, y: 0 });
+    }, []);
+    const handlePreviewPointerDown = useCallback(
+        (event: ReactPointerEvent<HTMLDivElement>) => {
+            if (previewZoom <= IMAGE_PREVIEW_MIN_ZOOM) return;
+            previewDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offsetX: previewOffset.x, offsetY: previewOffset.y };
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setIsPreviewDragging(true);
+        },
+        [previewOffset.x, previewOffset.y, previewZoom],
+    );
+    const handlePreviewPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        const drag = previewDragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        setPreviewOffset({ x: drag.offsetX + event.clientX - drag.startX, y: drag.offsetY + event.clientY - drag.startY });
+    }, []);
+    const handlePreviewPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        if (previewDragRef.current?.pointerId !== event.pointerId) return;
+        previewDragRef.current = null;
+        setIsPreviewDragging(false);
+    }, []);
     const handleNodeRetry = useCallback(
         (node: CanvasNodeData) => {
             if (node.type === CanvasNodeType.Text && (node.metadata?.textCount || 1) > 1) {
@@ -2907,16 +3894,35 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, nodes, renderPluginPanel, runningNodeId, startNodeReferenceSelection],
+        [
+            configInputsById,
+            confirmStopGeneration,
+            connectedNodesByNodeId,
+            disconnectNodeReference,
+            handleConfigNodeChange,
+            handleGenerateNode,
+            handleNodePromptChange,
+            mentionReferencesByNodeId,
+            nodes,
+            renderPluginPanel,
+            runningNodeId,
+            startNodeReferenceSelection,
+        ],
     );
 
     const renderNodeContentPanel = useCallback(
-        (contentNode: CanvasNodeData) => (
+        (contentNode: CanvasNodeData, controls: { onConnectStart: (event: ReactMouseEvent, portId: string) => void }) => (
             <CanvasConfigNodePanel
                 node={contentNode}
+                backgroundTone={backgroundTone}
                 isRunning={runningNodeId === contentNode.id}
                 inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
                 onConfigChange={handleConfigNodeChange}
+                nodes={nodes}
+                connections={connections}
+                onConnectStart={controls.onConnectStart}
+                onDisconnectPort={(portId) => setConnections((prev) => prev.filter((connection) => !(connection.toNodeId === contentNode.id && sameRunningHubWorkflowPort(connection.toPort, portId))))}
+                onUploadToPort={(file, portId, kind) => void uploadWorkflowMaterial(contentNode.id, portId, kind, file)}
                 onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                 onStop={confirmStopGeneration}
                 onGenerate={(nodeId) => {
@@ -2925,7 +3931,7 @@ function InfiniteCanvasPage() {
                 }}
             />
         ),
-        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, runningNodeId],
+        [backgroundTone, configInputsById, confirmStopGeneration, connectingParams, connectionTargetNodeId, connections, handleConfigNodeChange, handleGenerateNode, nodes, runningNodeId, uploadWorkflowMaterial],
     );
 
     if (!projectLoaded) return <CanvasRefreshShell />;
@@ -2933,36 +3939,52 @@ function InfiniteCanvasPage() {
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onPreviewNode={setPreviewNodeId} onInsertAsset={handleAssetInsert} />
-            <section className="relative min-w-0 flex-1 overflow-hidden">
-                <CanvasTopBar
-                    title={currentProject?.title || t("canvas.projectPage.untitledCanvas")}
-                    titleDraft={titleDraft}
-                    isTitleEditing={titleEditing}
-                    onTitleDraftChange={setTitleDraft}
-                    onStartTitleEditing={startTitleEditing}
-                    onFinishTitleEditing={finishTitleEditing}
-                    onCancelTitleEditing={() => setTitleEditing(false)}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
-                    onHome={() => navigate("/")}
-                    onProjects={() => navigate("/canvas")}
-                    onCreateProject={createAndOpenProject}
-                    onDeleteProject={deleteCurrentProject}
-                    onExportProject={exportCurrentProject}
-                    onImportImage={() => handleUploadRequest()}
-                    onOpenPlugins={() => setPluginManagerOpen(true)}
-                    onUndo={undoCanvas}
-                    onRedo={redoCanvas}
-                    agentOpen={agentPanelOpen}
-                    compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
-                    onToggleAgent={toggleAgentPanel}
-                />
+            <section className="@container relative min-w-0 flex-1 overflow-hidden" data-canvas-workspace data-focus-mode={focusMode}>
+                {focusMode ? (
+                    <button
+                        type="button"
+                        aria-label="退出专注模式"
+                        className="absolute right-4 top-3 z-50 flex h-11 items-center gap-2 rounded-2xl px-3 text-xs backdrop-blur-xl"
+                        style={{ background: theme.toolbar.panel }}
+                        onClick={() => setFocusMode(false)}
+                    >
+                        <Scan className="size-4" />
+                        退出专注 <span className="opacity-40">Esc</span>
+                    </button>
+                ) : (
+                    <CanvasTopBar
+                        title={currentProject?.title || t("canvas.projectPage.untitledCanvas")}
+                        titleDraft={titleDraft}
+                        isTitleEditing={titleEditing}
+                        onTitleDraftChange={setTitleDraft}
+                        onStartTitleEditing={startTitleEditing}
+                        onFinishTitleEditing={finishTitleEditing}
+                        onCancelTitleEditing={() => setTitleEditing(false)}
+                        canUndo={historyState.canUndo}
+                        canRedo={historyState.canRedo}
+                        onHome={() => navigate("/")}
+                        onProjects={() => navigate("/canvas")}
+                        onCreateProject={createAndOpenProject}
+                        onDeleteProject={deleteCurrentProject}
+                        onExportProject={exportCurrentProject}
+                        onImportImage={() => handleUploadRequest()}
+                        onOpenPlugins={() => setPluginManagerOpen(true)}
+                        onImportRunningHubWorkflow={() => setRunningHubWorkflowImportOpen(true)}
+                        onOpenWorkflowLibrary={() => setWorkflowLibraryOpen(true)}
+                        onUndo={undoCanvas}
+                        onRedo={redoCanvas}
+                        agentOpen={agentPanelOpen}
+                        compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
+                        onToggleAgent={toggleAgentPanel}
+                    />
+                )}
 
                 <InfiniteCanvas
                     containerRef={containerRef}
                     viewport={viewport}
                     tool={canvasTool}
                     backgroundMode={backgroundMode}
+                    backgroundTone={backgroundTone}
                     onViewportChange={(next) => {
                         setViewport(next);
                         setContextMenu(null);
@@ -2980,80 +4002,121 @@ function InfiniteCanvasPage() {
                     onDrop={handleDrop}
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 0 }}>
-                        {connections
-                            .map((connection) => {
-                                const from = nodeById.get(connection.fromNodeId);
-                                const to = nodeById.get(connection.toNodeId);
-                                if (!from || !to) return null;
+                        {visibleConnections.map((connection) => {
+                            const from = nodeById.get(connection.fromNodeId);
+                            const to = nodeById.get(connection.toNodeId);
+                            if (!from || !to) return null;
+                            const runningHubResource = runningHubResourceForNode(effectiveConfig, to);
 
-                                return (
-                                    <ConnectionPath
-                                        key={connection.id}
-                                        connection={connection}
-                                        from={from}
-                                        to={to}
-                                        active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
-                                        onSelect={() => {
-                                            setSelectedConnectionId(connection.id);
-                                            setSelectedNodeIds(new Set());
-                                            setContextMenu(null);
-                                        }}
-                                        onContextMenu={(event) => {
-                                            setSelectedConnectionId(connection.id);
-                                            setSelectedNodeIds(new Set());
-                                            setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
-                                        }}
-                                    />
-                                );
-                            })}
-                        {connectingParams ? <ActiveConnectionPath node={nodeById.get(connectingParams.nodeId)} handle={connectingParams} mouseWorld={mouseWorld} target={connectionTargetNodeId ? nodeById.get(connectionTargetNodeId) : undefined} /> : null}
+                            return (
+                                <ConnectionPath
+                                    key={connection.id}
+                                    connection={connection}
+                                    from={from}
+                                    to={to}
+                                    active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
+                                    flowing={from.metadata?.status === NODE_STATUS_LOADING || to.metadata?.status === NODE_STATUS_LOADING}
+                                    workflowPortsOpen={Boolean(to.metadata?.runningHubWorkflowPortsOpen)}
+                                    workflowResource={runningHubResource}
+                                    scale={viewport.k}
+                                    onSelect={() => {
+                                        setSelectedConnectionId(connection.id);
+                                        setSelectedNodeIds(new Set());
+                                        setContextMenu(null);
+                                    }}
+                                    onDisconnect={() => deleteConnection(connection.id)}
+                                    onContextMenu={(event) => {
+                                        setSelectedConnectionId(connection.id);
+                                        setSelectedNodeIds(new Set());
+                                        setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
+                                    }}
+                                />
+                            );
+                        })}
+                        {connectingParams ? (
+                            <ActiveConnectionPath
+                                node={nodeById.get(connectingParams.nodeId)}
+                                handle={connectingParams}
+                                mouseWorld={mouseWorld}
+                                target={connectionTargetNodeId ? nodeById.get(connectionTargetNodeId) : undefined}
+                                targetPortId={connectionTargetPortId || undefined}
+                                sourceWorkflowPortsOpen={Boolean(nodeById.get(connectingParams.nodeId)?.metadata?.runningHubWorkflowPortsOpen)}
+                                sourceWorkflowResource={nodeById.get(connectingParams.nodeId) ? runningHubResourceForNode(effectiveConfig, nodeById.get(connectingParams.nodeId)!) : undefined}
+                                targetWorkflowPortsOpen={Boolean(connectionTargetNodeId && nodeById.get(connectionTargetNodeId)?.metadata?.runningHubWorkflowPortsOpen)}
+                                targetWorkflowResource={connectionTargetNodeId && nodeById.get(connectionTargetNodeId) ? runningHubResourceForNode(effectiveConfig, nodeById.get(connectionTargetNodeId)!) : undefined}
+                                scale={viewport.k}
+                            />
+                        ) : null}
                     </svg>
 
-                    {visibleNodes.map((node) => (
-                        <CanvasNode
-                            key={node.id}
-                            data={node}
-                            scale={viewport.k}
-                            isSelected={selectedNodeIds.has(node.id)}
-                            isRelated={relatedHighlight.nodeIds.has(node.id)}
-                            isFocusRelated={activeNodeId === node.id}
-                            isConnectionTarget={connectionTargetNodeId === node.id}
-                            isConnecting={Boolean(connectingParams)}
-                            referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes) ? "disabled" : "available"}
-                            showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
-                            groupChildCount={groupChildCountById.get(node.id) || 0}
-                            isGroupDropTarget={dropTargetGroupId === node.id}
-                            batchExpanded={expandedBatchNodeIds.has(node.id)}
-                            showImageInfo={showImageInfo}
-                            mentionReferences={mentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES}
-                            pluginHost={pluginHost}
-                            registryVersion={nodeRegistryVersion}
-                            renderPanel={renderNodePanel}
-                            renderNodeContent={renderNodeContentPanel}
-                            onMouseDown={handleNodeMouseDown}
-                            onSelectCapture={handleNodeSelectCapture}
-                            onHoverStart={handleNodeHoverStart}
-                            onHoverEnd={handleNodeHoverEnd}
-                            onConnectStart={handleConnectStart}
-                            onResizeStart={handleNodeResizeStart}
-                            onResize={handleNodeResize}
-                            onResizeEnd={handleNodeResizeEnd}
-                            onContentChange={handleNodeContentChange}
-                            onTitleChange={handleNodeTitleChange}
-                            onToggleBatch={toggleBatchExpanded}
-                            onSetBatchPrimary={setBatchPrimary}
-                            onDuplicateBatchImage={duplicateBatchImage}
-                            onDownloadBatchImage={downloadBatchImage}
-                            onRetryBatchImage={retryBatchImage}
-                            onDeleteBatchImage={deleteBatchImage}
-                            onRetry={handleNodeRetry}
-                            onViewImage={handleNodeViewImage}
-                            onSelectReference={selectNodeReference}
-                            onContextMenu={handleNodeContextMenu}
-                        />
-                    ))}
+                    {visibleNodes.map((node) => {
+                        const runningHubResource = runningHubResourceForNode(effectiveConfig, node);
+                        const hasDedicatedInputPorts = Boolean(runningHubResource);
+                        return (
+                            <CanvasNode
+                                key={node.id}
+                                data={node}
+                                scale={viewport.k}
+                                isSelected={selectedNodeIds.has(node.id)}
+                                isRelated={relatedHighlight.nodeIds.has(node.id)}
+                                isFocusRelated={activeNodeId === node.id}
+                                isConnectionTarget={connectionTargetNodeId === node.id}
+                                isConnecting={Boolean(connectingParams)}
+                                hasDedicatedInputPorts={hasDedicatedInputPorts}
+                                runningHubPortHeads={runningHubResource ? runningHubWorkflowPortHeads(runningHubResource, connections, node.id) : undefined}
+                                runningHubWorkflowPortsOpen={Boolean(node.metadata?.runningHubWorkflowPortsOpen)}
+                                referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes) ? "disabled" : "available"}
+                                showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
+                                groupChildCount={groupChildCountById.get(node.id) || 0}
+                                isGroupDropTarget={dropTargetGroupId === node.id}
+                                batchExpanded={expandedBatchNodeIds.has(node.id)}
+                                showImageInfo={showImageInfo}
+                                backgroundTone={backgroundTone}
+                                viewMode={viewMode}
+                                mentionReferences={mentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES}
+                                pluginHost={pluginHost}
+                                registryVersion={nodeRegistryVersion}
+                                renderPanel={renderNodePanel}
+                                renderNodeContent={renderNodeContentPanel}
+                                onMouseDown={handleNodeMouseDown}
+                                onSelectCapture={handleNodeSelectCapture}
+                                onHoverStart={handleNodeHoverStart}
+                                onHoverEnd={handleNodeHoverEnd}
+                                onConnectStart={handleConnectStart}
+                                onResizeStart={handleNodeResizeStart}
+                                onResize={handleNodeResize}
+                                onResizeEnd={handleNodeResizeEnd}
+                                onContentChange={handleNodeContentChange}
+                                onStoryboardChange={handleStoryboardChange}
+                                onPromptChange={handleNodePromptChange}
+                                onGenerate={(nodeId, prompt) => void handleGenerateNode(nodeId, "text", prompt)}
+                                onStop={confirmStopGeneration}
+                                isRunning={runningNodeId === node.id}
+                                onTitleChange={handleNodeTitleChange}
+                                onToggleBatch={toggleBatchExpanded}
+                                onSetBatchPrimary={setBatchPrimary}
+                                onDuplicateBatchImage={duplicateBatchImage}
+                                onDownloadBatchImage={downloadBatchImage}
+                                onRetryBatchImage={retryBatchImage}
+                                onDeleteBatchImage={deleteBatchImage}
+                                onRetry={handleNodeRetry}
+                                onViewImage={handleNodeViewImage}
+                                onSelectReference={selectNodeReference}
+                                onContextMenu={handleNodeContextMenu}
+                            />
+                        );
+                    })}
 
-                    {referencePickerNodeId ? <button type="button" className="absolute left-1/2 top-4 z-[90] -translate-x-1/2 rounded-full border px-4 py-2 text-sm font-medium shadow-lg backdrop-blur" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }} onClick={exitNodeReferenceSelection}>{t("canvas.references.selectingHint")}</button> : null}
+                    {referencePickerNodeId ? (
+                        <button
+                            type="button"
+                            className="absolute left-1/2 top-4 z-[90] -translate-x-1/2 rounded-full border px-4 py-2 text-sm font-medium shadow-lg backdrop-blur"
+                            style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }}
+                            onClick={exitNodeReferenceSelection}
+                        >
+                            {t("canvas.references.selectingHint")}
+                        </button>
+                    ) : null}
 
                     {selectionBox ? (
                         <svg
@@ -3068,10 +4131,11 @@ function InfiniteCanvasPage() {
                             <rect width="100%" height="100%" fill={theme.canvas.selectionFill} stroke={theme.canvas.selectionStroke} strokeOpacity={0.55} strokeWidth={1 / viewport.k} strokeDasharray={`${6 / viewport.k} ${4 / viewport.k}`} />
                         </svg>
                     ) : null}
-                    {pendingConnectionCreate ? <ConnectionCreateMenu pending={pendingConnectionCreate} onCreate={(type) => createConnectedNode(type, pendingConnectionCreate)} onClose={cancelPendingConnectionCreate} /> : null}
+                    {pendingConnectionCreate ? <ConnectionCreateMenu pending={pendingConnectionCreate} scale={viewport.k} onCreate={(request) => createConnectedNode(request, pendingConnectionCreate)} onClose={cancelPendingConnectionCreate} /> : null}
                     {nodeCreatePosition ? (
                         <NodeCreateMenu
                             position={nodeCreatePosition}
+                            scale={viewport.k}
                             onCreate={(type) => {
                                 createNode(type, nodeCreatePosition);
                                 setNodeCreatePosition(null);
@@ -3090,7 +4154,10 @@ function InfiniteCanvasPage() {
                     onInfo={(node) => setInfoNodeId(node.id)}
                     onDecreaseFont={(node) => handleFontSizeChange(node.id, Math.max(10, (node.metadata?.fontSize || 14) - 2))}
                     onIncreaseFont={(node) => handleFontSizeChange(node.id, Math.min(32, (node.metadata?.fontSize || 14) + 2))}
+                    onTextImport={handleTextNodeImport}
+                    onTextTagsChange={handleTextNodeTagsChange}
                     onToggleDialog={(node) => setDialogNodeId((current) => (current === node.id ? null : node.id))}
+                    onAnalyzeVideo={analyzeVideoWithSkill}
                     onGenerateImage={generateImageFromTextNode}
                     onUpload={(node) => handleUploadRequest(node.id)}
                     onDownload={downloadNodeImage}
@@ -3099,47 +4166,128 @@ function InfiniteCanvasPage() {
                     onCrop={(node) => setCropNodeId(node.id)}
                     onSplit={(node) => setSplitNodeId(node.id)}
                     onUpscale={(node) => setUpscaleNodeId(node.id)}
-                    onSuperResolve={(node) => setSuperResolveNodeId(node.id)}
+                    onSuperResolve={(node) => openSeedVrUpscale(node)}
+                    superResolveOpen={Boolean(seedVrUpscaleNode?.metadata?.content)}
+                    onSuperResolveOpenChange={(open) => {
+                        if (!open) setSeedVrUpscaleNodeId(null);
+                    }}
+                    superResolveContent={
+                        <div id="canvas-seedvr-upscale-settings" className="w-[280px] space-y-3 p-3" data-canvas-shortcuts-ignore>
+                            <div className="text-sm font-semibold">{t("canvas.projectPage.seedVrUpscale")}</div>
+                            <label className="block space-y-1.5">
+                                <span className="text-xs font-medium opacity-70">{seedVrPixelField?.label || t("canvas.projectPage.seedVrUpscalePixel")}</span>
+                                <CanvasRunningHubWorkflowSelect
+                                    ariaLabel={seedVrPixelField?.label || t("canvas.projectPage.seedVrUpscalePixel")}
+                                    value={seedVrUpscalePixel}
+                                    options={seedVrPixelField?.options || []}
+                                    optionLabels={seedVrPixelField?.optionLabels}
+                                    theme={theme}
+                                    menuMinWidth={256}
+                                    menuPlacement="top"
+                                    menuPortalContainer={() => document.getElementById("canvas-seedvr-upscale-settings")}
+                                    onChange={setSeedVrUpscalePixel}
+                                />
+                            </label>
+                            <label className="block space-y-1.5">
+                                <span className="text-xs font-medium opacity-70">{t("canvas.projectPage.seedVrUpscaleMemory")}</span>
+                                <CanvasRunningHubWorkflowSelect
+                                    ariaLabel={t("canvas.projectPage.seedVrUpscaleMemory")}
+                                    value={seedVrUpscaleInstanceType}
+                                    options={[...RUNNING_HUB_WORKFLOW_INSTANCE_TYPES]}
+                                    optionLabels={Object.fromEntries(RUNNING_HUB_WORKFLOW_INSTANCE_TYPES.map((value) => [value, runningHubWorkflowInstanceLabel(value)]))}
+                                    theme={theme}
+                                    menuMinWidth={256}
+                                    menuPlacement="top"
+                                    menuPortalContainer={() => document.getElementById("canvas-seedvr-upscale-settings")}
+                                    onChange={(value) => setSeedVrUpscaleInstanceType(value as RunningHubWorkflowInstanceType)}
+                                />
+                            </label>
+                            <div className="flex justify-end gap-2 pt-1">
+                                <Button size="small" className="!h-9" onClick={() => setSeedVrUpscaleNodeId(null)}>
+                                    {t("common.cancel")}
+                                </Button>
+                                <Button
+                                    size="small"
+                                    type="primary"
+                                    className="!h-9"
+                                    onClick={() => {
+                                        if (seedVrUpscaleNode) void runSeedVrUpscale(seedVrUpscaleNode, seedVrUpscalePixel, seedVrUpscaleInstanceType);
+                                    }}
+                                >
+                                    {t("canvas.projectPage.seedVrUpscaleRun")}
+                                </Button>
+                            </div>
+                        </div>
+                    }
                     onAngle={(node) => setAngleNodeId(node.id)}
+                    onPersonAdjust={(node, mode) => {
+                        setPersonAdjustStep(mode || "menu");
+                        setPersonNodeId(node.id);
+                    }}
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
                     onRetry={(node) => void handleRetryNode(node)}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}
+                    viewMode={viewMode}
                 />
 
-                <CanvasToolbar
-                    selectedCount={selectedNodeIds.size}
-                    canvasTool={canvasTool}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
-                    backgroundMode={backgroundMode}
-                    showImageInfo={showImageInfo}
-                    onAddImage={() => createNode(CanvasNodeType.Image)}
-                    onAddVideo={() => createNode(CanvasNodeType.Video)}
-                    onAddAudio={() => createNode(CanvasNodeType.Audio)}
-                    onAddText={() => createNode(CanvasNodeType.Text)}
-                    onAddConfig={() => createNode(CanvasNodeType.Config)}
-                    onAddGroup={() => createNode(CanvasNodeType.Group)}
-                    onAddExtensionNode={(type) => createNode(type)}
-                    onUndo={undoCanvas}
-                    onRedo={redoCanvas}
-                    onUpload={() => handleUploadRequest()}
-                    onDelete={() => deleteNodes(new Set(selectedNodeIds))}
-                    onClear={() => setClearConfirmOpen(true)}
-                    onCanvasToolChange={setCanvasTool}
-                    onBackgroundModeChange={setBackgroundMode}
-                    onShowImageInfoChange={setShowImageInfo}
-                />
+                {hasMultipleSelectedNodes && !selectionBox ? (
+                    <CanvasSelectionToolbar nodes={selectedNodes} viewport={viewport} showToolbar={!isNodeDragging && !isNodeResizing} canGroup={canGroupSelection} canUngroup={canUngroupSelection} onGroup={groupSelection} onUngroup={ungroupSelection} />
+                ) : null}
 
-                {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
+                {!focusMode ? (
+                    <CanvasToolbar
+                        selectedCount={selectedNodeIds.size}
+                        canvasTool={canvasTool}
+                        canUndo={historyState.canUndo}
+                        canRedo={historyState.canRedo}
+                        backgroundMode={backgroundMode}
+                        backgroundTone={backgroundTone}
+                        showImageInfo={showImageInfo}
+                        viewMode={viewMode}
+                        onAddImage={() => createNode(CanvasNodeType.Image)}
+                        onAddVideo={() => createNode(CanvasNodeType.Video)}
+                        onAddAudio={() => createNode(CanvasNodeType.Audio)}
+                        onAddText={() => createNode(CanvasNodeType.Text)}
+                        onAddConfig={() => createNode(CanvasNodeType.Config)}
+                        onAddGroup={() => createNode(CanvasNodeType.Group)}
+                        onAddExtensionNode={(type) => createNode(type)}
+                        onUndo={undoCanvas}
+                        onRedo={redoCanvas}
+                        onUpload={() => handleUploadRequest()}
+                        onOpenAssets={() => setAssetPickerOpen(true)}
+                        onDelete={() => deleteNodes(new Set(selectedNodeIds))}
+                        onClear={() => setClearConfirmOpen(true)}
+                        onCanvasToolChange={setCanvasTool}
+                        onBackgroundModeChange={setBackgroundMode}
+                        onBackgroundToneChange={setBackgroundTone}
+                        onShowImageInfoChange={setShowImageInfo}
+                    />
+                ) : null}
 
-                <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
+                {!focusMode ? (
+                    <CanvasZoomControls
+                        scale={viewport.k}
+                        onScaleChange={setZoomScale}
+                        onReset={resetViewport}
+                        isMiniMapOpen={isMiniMapOpen}
+                        onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)}
+                        miniMap={isMiniMapOpen && !focusMode ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
+                        onArrange={arrangeNodes}
+                        canArrange={nodes.length > 1 && !isNodeDragging && !isNodeResizing}
+                        viewMode={viewMode}
+                        onViewModeChange={setViewMode}
+                    />
+                ) : null}
+                <CanvasNodeSearch nodes={nodes} onFocusNode={focusNode} />
 
                 {contextMenu ? (
                     <CanvasNodeContextMenu
                         menu={contextMenu}
                         canCaptureVideoFrame={contextMenuNode?.type === CanvasNodeType.Video && Boolean(contextMenuNode.metadata?.content)}
+                        canGroup={contextMenu.type === "node" && canGroupSelection}
+                        canUngroup={contextMenu.type === "node" && canUngroupSelection}
                         onClose={() => setContextMenu(null)}
                         onCaptureVideoFrame={(position) => {
                             if (contextMenu.type !== "node") return;
@@ -3150,6 +4298,8 @@ function InfiniteCanvasPage() {
                             duplicateNode(contextMenu.nodeId);
                             setContextMenu(null);
                         }}
+                        onGroup={groupSelection}
+                        onUngroup={ungroupSelection}
                         onDelete={() => {
                             if (contextMenu.type === "node") {
                                 deleteNodes(new Set([contextMenu.nodeId]));
@@ -3165,6 +4315,8 @@ function InfiniteCanvasPage() {
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
                 <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
+                <RunningHubWorkflowImportModal open={runningHubWorkflowImportOpen} channel={runningHubChannel || null} onClose={() => setRunningHubWorkflowImportOpen(false)} onImported={handleRunningHubWorkflowImported} />
+                <CanvasWorkflowLibraryModal open={workflowLibraryOpen} onClose={() => setWorkflowLibraryOpen(false)} onAdd={addWorkflowLibraryNode} onDelete={handleRunningHubWorkflowDeleted} />
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode!, crop)} /> : null}
 
@@ -3178,22 +4330,94 @@ function InfiniteCanvasPage() {
                     <CanvasNodeUpscaleDialog dataUrl={upscaleNode.metadata.content} open={Boolean(upscaleNode)} onClose={() => setUpscaleNodeId(null)} onConfirm={(params) => void upscaleImageNode(upscaleNode!, params)} />
                 ) : null}
 
-                <Modal title={t("canvas.projectPage.superResolve")} open={Boolean(superResolveNode?.metadata?.content)} centered footer={null} onCancel={() => setSuperResolveNodeId(null)}>
-                    <div className="py-8 text-center text-base font-medium">{t("canvas.projectPage.notImplemented")}</div>
-                </Modal>
-
-                {angleNode?.metadata?.content ? <CanvasNodeAngleDialog dataUrl={angleNode.metadata.content} open={Boolean(angleNode)} onClose={() => setAngleNodeId(null)} onConfirm={(params) => void generateAngleNode(angleNode!, params)} /> : null}
+                {angleNode?.metadata?.content ? (
+                    <CanvasNodeAngleDialog
+                        anchorNodeId={angleNode.id}
+                        canvasScale={viewport.k}
+                        canvasViewport={viewport}
+                        dataUrl={angleNode.metadata.content}
+                        open={Boolean(angleNode)}
+                        onClose={() => setAngleNodeId(null)}
+                        onConfirm={(params) => void generateAngleNode(angleNode!, params)}
+                    />
+                ) : null}
+                {personNode?.metadata?.content ? (
+                    <CanvasNodePersonAdjustDialog
+                        anchorNodeId={personNode.id}
+                        canvasScale={viewport.k}
+                        canvasViewport={viewport}
+                        dataUrl={personNode.metadata.content}
+                        initialStep={personAdjustStep}
+                        open={Boolean(personNode)}
+                        onClose={() => setPersonNodeId(null)}
+                        onConfirm={(params) => void generatePersonAdjustmentNode(personNode!, params)}
+                    />
+                ) : null}
 
                 <Modal
                     title={t("canvas.projectPage.imageDetails")}
                     open={Boolean(previewContent)}
                     centered
-                    onCancel={() => setPreviewNodeId(null)}
+                    onCancel={() => {
+                        setPreviewNodeId(null);
+                        resetImagePreview();
+                    }}
                     footer={null}
-                    width="auto"
-                    styles={{ body: { padding: 0, display: "flex", justifyContent: "center", alignItems: "center", maxHeight: "80vh" } }}
+                    width="min(92vw, 1800px)"
+                    styles={{ body: { padding: 0 } }}
                 >
-                    {previewContent ? <img src={previewContent} alt={previewNode?.title || t("assets.kinds.image")} style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain" }} /> : null}
+                    {previewContent ? (
+                        <div className="relative h-[min(80vh,1000px)] overflow-hidden rounded-b-lg" style={{ background: theme.canvas.background }}>
+                            <div
+                                className="flex h-full w-full touch-none items-center justify-center overflow-hidden"
+                                style={{ cursor: previewZoom > IMAGE_PREVIEW_MIN_ZOOM ? (isPreviewDragging ? "grabbing" : "grab") : "zoom-in" }}
+                                onWheel={(event) => {
+                                    event.preventDefault();
+                                    setImagePreviewZoom(previewZoom + (event.deltaY < 0 ? IMAGE_PREVIEW_ZOOM_STEP : -IMAGE_PREVIEW_ZOOM_STEP));
+                                }}
+                                onDoubleClick={() => setImagePreviewZoom(previewZoom > IMAGE_PREVIEW_MIN_ZOOM ? IMAGE_PREVIEW_MIN_ZOOM : 2)}
+                                onPointerDown={handlePreviewPointerDown}
+                                onPointerMove={handlePreviewPointerMove}
+                                onPointerUp={handlePreviewPointerUp}
+                                onPointerCancel={handlePreviewPointerUp}
+                            >
+                                <img
+                                    src={previewContent}
+                                    draggable={false}
+                                    alt={previewNode?.title || t("assets.kinds.image")}
+                                    className="max-h-full max-w-full select-none object-contain"
+                                    style={{ transform: `translate(${previewOffset.x}px, ${previewOffset.y}px) scale(${previewZoom})`, transition: isPreviewDragging ? "none" : "transform 140ms ease-out" }}
+                                />
+                            </div>
+                            <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-xl border px-1.5 py-1 shadow-xl backdrop-blur" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
+                                <button
+                                    type="button"
+                                    className="grid size-8 place-items-center rounded-lg transition hover:opacity-70 disabled:opacity-35"
+                                    style={{ color: theme.node.text }}
+                                    title="缩小"
+                                    aria-label="缩小"
+                                    disabled={previewZoom <= IMAGE_PREVIEW_MIN_ZOOM}
+                                    onClick={() => setImagePreviewZoom(previewZoom - IMAGE_PREVIEW_ZOOM_STEP)}
+                                >
+                                    <Minus className="size-4" />
+                                </button>
+                                <button type="button" className="min-w-14 rounded-lg px-2 py-1 text-xs font-medium transition hover:opacity-70" style={{ color: theme.node.text }} title="适配图片" onClick={resetImagePreview}>
+                                    {Math.round(previewZoom * 100)}%
+                                </button>
+                                <button
+                                    type="button"
+                                    className="grid size-8 place-items-center rounded-lg transition hover:opacity-70 disabled:opacity-35"
+                                    style={{ color: theme.node.text }}
+                                    title="放大"
+                                    aria-label="放大"
+                                    disabled={previewZoom >= IMAGE_PREVIEW_MAX_ZOOM}
+                                    onClick={() => setImagePreviewZoom(previewZoom + IMAGE_PREVIEW_ZOOM_STEP)}
+                                >
+                                    <Plus className="size-4" />
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
                 </Modal>
 
                 <Modal

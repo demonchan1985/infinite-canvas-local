@@ -4,13 +4,21 @@ import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import type { AiConfig } from "@/stores/use-config-store";
+import { imageSizeForResolution, normalizeImageResolution } from "@/lib/media-size";
+import { isGptImage25Model, type AiConfig } from "@/stores/use-config-store";
 
-const qualityOptions = [
+const standardQualityOptions = [
     { value: "auto", labelKey: "auto" },
-    { value: "high", labelKey: "high" },
-    { value: "medium", labelKey: "medium" },
     { value: "low", labelKey: "low" },
+    { value: "medium", labelKey: "medium" },
+    { value: "high", labelKey: "high" },
+];
+const gptImage25QualityOptions = [...standardQualityOptions, { value: "xhigh", labelKey: "xhigh" }, { value: "max", labelKey: "max" }];
+const resolutionOptions = [
+    { value: "auto", label: "自动" },
+    { value: "1k", label: "1K" },
+    { value: "2k", label: "2K" },
+    { value: "4k", label: "4K" },
 ];
 const DIMENSION_STEP = 16;
 
@@ -20,22 +28,26 @@ const aspectOptions = [
     { value: "2:3", label: "2:3", width: 1024, height: 1536, icon: "portrait" },
     { value: "4:3", label: "4:3", width: 1360, height: 1024, icon: "landscape" },
     { value: "3:4", label: "3:4", width: 1024, height: 1360, icon: "portrait" },
+    { value: "4:5", label: "4:5", width: 1024, height: 1280, icon: "portrait" },
+    { value: "5:4", label: "5:4", width: 1280, height: 1024, icon: "landscape" },
     { value: "16:9", label: "16:9", width: 1824, height: 1024, icon: "landscape" },
     { value: "9:16", label: "9:16", width: 1024, height: 1824, icon: "portrait" },
-    { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
-    { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
-    { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
-    { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
-    { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
-    { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
+    { value: "21:9", label: "21:9", width: 2384, height: 1024, icon: "landscape" },
 ];
 
-export const imageQualityOptions = qualityOptions.map((item) => ({ value: item.value, get label() { return i18n.t(`settingsPanels.common.${item.labelKey}`); } }));
-export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.size || item.value, label: item.label }));
+function qualityOptionsForModel(model: string) {
+    return isGptImage25Model(model) ? gptImage25QualityOptions : standardQualityOptions;
+}
+
+export function imageQualityOptionsForModel(model: string) {
+    return qualityOptionsForModel(model).map((item) => ({ value: item.value, get label() { return i18n.t(`settingsPanels.common.${item.labelKey}`); } }));
+}
+
+export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.value, label: item.label }));
 
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "quality" | "size" | "count" | "background", value: string) => void;
+    onConfigChange: (key: "quality" | "imageResolution" | "size" | "count" | "background", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
@@ -43,23 +55,35 @@ type ImageSettingsPanelProps = {
     quickCount?: number;
 };
 
-export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 3 }: ImageSettingsPanelProps) {
     const { t } = useTranslation();
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
     const quality = config.quality || "auto";
+    const availableQualityOptions = qualityOptionsForModel(config.imageModel || config.model);
+    const resolution = normalizeImageResolution(config.imageResolution);
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const transparentBackground = config.background === "transparent";
-    const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
+    const selectedAspect = findAspectOption(activeSize);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.size || option?.value || "auto");
+        if (!option) return;
+        const next = resolution === "auto" ? { width: option.width, height: option.height } : dimensionsForResolution(resolution, option.value, option);
+        onConfigChange("size", `${next.width}x${next.height}`);
+    };
+    const selectResolution = (value: string) => {
+        const nextResolution = normalizeImageResolution(value);
+        onConfigChange("imageResolution", nextResolution);
+        if (nextResolution === "auto") return;
+        const next = dimensionsForResolution(nextResolution, selectedAspect?.value || "1:1", dimensions);
+        onConfigChange("size", `${next.width}x${next.height}`);
     };
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
         const width = key === "width" ? next : dimensions.width;
         const height = key === "height" ? next : dimensions.height;
+        onConfigChange("imageResolution", "auto");
         onConfigChange("size", `${alignDimension(width, snapDimensionToStep)}x${alignDimension(height, snapDimensionToStep)}`);
     };
 
@@ -77,10 +101,31 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 {showTitle ? <div className="text-lg font-semibold">{t("settingsPanels.image.title")}</div> : null}
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.quality")}</SettingTitle>
-                    <div className="grid grid-cols-4 gap-2.5">
-                        {qualityOptions.map((item) => (
+                    <div className={`grid gap-2.5 ${availableQualityOptions.length > 4 ? "grid-cols-3" : "grid-cols-4"}`}>
+                        {availableQualityOptions.map((item) => (
                             <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {t(`settingsPanels.common.${item.labelKey}`)}
+                            </OptionPill>
+                        ))}
+                    </div>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                        <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.transparent")}</SettingTitle>
+                        <div className="text-xs" style={{ color: theme.node.muted, opacity: 0.75 }}>
+                            {t("settingsPanels.image.transparentHint")}
+                        </div>
+                    </div>
+                    <span onMouseDown={(event) => event.stopPropagation()}>
+                        <Switch size="small" checked={transparentBackground} onChange={(checked) => onConfigChange("background", checked ? "transparent" : "")} />
+                    </span>
+                </div>
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.resolution")}</SettingTitle>
+                    <div className="grid grid-cols-4 gap-2.5">
+                        {resolutionOptions.map((item) => (
+                            <OptionPill key={item.value} selected={resolution === item.value} theme={theme} onClick={() => selectResolution(item.value)}>
+                                {item.label}
                             </OptionPill>
                         ))}
                     </div>
@@ -98,14 +143,14 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         </div>
                     </div>
                     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                        <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
+                        <DimensionInput prefix="W" value={dimensions.width} disabled={false} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
                         <span className="text-lg opacity-45">↔</span>
-                        <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                        <DimensionInput prefix="H" value={dimensions.height} disabled={false} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
                     </div>
                 </div>
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.aspectRatio")}</SettingTitle>
-                    <div className="grid grid-cols-4 gap-2.5">
+                    <div className="grid grid-cols-5 gap-2.5">
                         {aspectOptions.map((item) => (
                             <button
                                 key={item.value}
@@ -120,17 +165,6 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             </button>
                         ))}
                     </div>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                        <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.transparent")}</SettingTitle>
-                        <div className="text-xs" style={{ color: theme.node.muted, opacity: 0.75 }}>
-                            {t("settingsPanels.image.transparentHint")}
-                        </div>
-                    </div>
-                    <span onMouseDown={(event) => event.stopPropagation()}>
-                        <Switch size="small" checked={transparentBackground} onChange={(checked) => onConfigChange("background", checked ? "transparent" : "")} />
-                    </span>
                 </div>
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>{t("settingsPanels.image.count")}</SettingTitle>
@@ -162,11 +196,15 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
 }
 
 export function imageQualityLabel(value: string) {
-    return (["auto", "high", "medium", "low"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value);
+    return (["auto", "high", "medium", "low", "xhigh", "max"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value);
 }
 
 export function imageSizeLabel(size: string) {
-    return aspectOptions.find((item) => (item.size || item.value) === size || item.value === size)?.label || size;
+    return findAspectOption(size)?.label || size;
+}
+
+export function imageResolutionLabel(value: string | undefined) {
+    return resolutionOptions.find((item) => item.value === normalizeImageResolution(value))?.label || "自动";
 }
 
 function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
@@ -257,6 +295,19 @@ function readSizeDimensions(size: string, fallback: { width: number; height: num
     };
 }
 
+function findAspectOption(size: string) {
+    const direct = aspectOptions.find((item) => item.value === size);
+    if (direct) return direct;
+    const dimensions = readSizeDimensions(size, aspectOptions[0]);
+    if (!/^\d+x\d+$/i.test(size)) return undefined;
+    const ratio = dimensions.width / Math.max(1, dimensions.height);
+    return aspectOptions.reduce((closest, item) => Math.abs(item.width / item.height - ratio) < Math.abs(closest.width / closest.height - ratio) ? item : closest, aspectOptions[0]);
+}
+
 function alignDimension(value: number, enabled: boolean) {
     return enabled ? Math.ceil(value / DIMENSION_STEP) * DIMENSION_STEP : value;
+}
+
+function dimensionsForResolution(resolution: string, ratio: string, fallback: { width: number; height: number }) {
+    return readSizeDimensions(imageSizeForResolution(resolution, ratio) || "", fallback);
 }

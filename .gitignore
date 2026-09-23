@@ -12,6 +12,11 @@ web/dist
 
 **/dist
 web/public/plugins
+canvas-agent/.runtime/
+web/public/models/FaceCap.glb
+web/public/logo-options.html
+design-previews/
+design-qa.md
 plugins/canvas/*/dist
 plugins/canvas/*/node_modules
 web/public/plugins

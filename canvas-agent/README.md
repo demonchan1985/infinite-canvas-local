@@ -1,5 +1,7 @@
 # Infinite Canvas Agent
 
+> 本独立版本请从仓库根目录运行 `node scripts/start-local.mjs`。此处保留的 npm 包名和部分 Codex 插件说明来自上游，`npx @basketikun/canvas-agent` 不会运行本仓库的修改版。
+
 本地 Canvas Agent 用来连接画布网页和用户电脑上的 Codex / Claude Code。本地开发时优先连接 `http://localhost:3000`，不需要先使用线上站点。
 
 ## 启动
@@ -40,9 +42,7 @@ Canvas Agent 默认只监听 `127.0.0.1`。网页第一次带正确 token 连接
 
 ## 发布
 
-`canvas-agent` 使用自己的 `package.json` 版本号，不跟仓库根目录 `VERSION` 绑定。推送到 `main` 后，GitHub Actions 会检查 npm 上是否已经存在当前包版本；不存在时才发布 `@basketikun/canvas-agent`。
-
-发布前需要在 GitHub 仓库 Secrets 中配置 `NPM_TOKEN`。
+本仓库不配置 npm 自动发布。`canvas-agent` 的包名与部分发布说明是上游遗留；请使用根目录启动脚本运行这里的源码，不要把它当作 `@basketikun/canvas-agent` 的发行仓库。
 
 ## Codex MCP
 

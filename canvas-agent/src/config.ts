@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export const DEFAULT_PORT = 17371;
-export const CONFIG_DIR = path.join(os.homedir(), ".infinite-canvas");
+export const DEFAULT_PORT = 17375;
+// 独立副本的配置、会话和工作空间不写入原版的用户目录。
+export const CONFIG_DIR = fileURLToPath(new URL("../.runtime/", import.meta.url));
 export const CONFIG_FILE = path.join(CONFIG_DIR, "canvas-agent.json");
 export const VERSION = readPackageVersion();
 export const AGENT_PROMPT = fs.readFileSync(new URL("../agent-instructions.md", import.meta.url), "utf8");

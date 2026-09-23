@@ -1,13 +1,15 @@
 import axios from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { CODEX_IMAGE_CHANNEL_ID, CODEX_IMAGE_MODEL, CODEX_IMAGE_MODELS, CODEX_TEXT_CHANNEL_ID, buildApiUrl, decodeChannelModel, findChannelModel, isGptImage25Model, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel, type RunningHubNodeBinding } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
+import { fitGptImage2Size, GPT_IMAGE_2_MAX_EDGE, GPT_IMAGE_2_MAX_PIXELS, GPT_IMAGE_2_MAX_RATIO, imageSizeForResolution, inferImageResolution, normalizeImageResolution } from "@/lib/media-size";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
+import type { RunningHubWorkflowRunOptions } from "@/types/canvas";
 
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -23,10 +25,7 @@ type ResponseToolCall = {
     thoughtSignature?: string;
 };
 
-type ResponseInputMessage =
-    | AiTextMessage
-    | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string }
-    | { role: "tool"; tool_call_id: string; content: string };
+type ResponseInputMessage = AiTextMessage | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string } | { role: "tool"; tool_call_id: string; content: string };
 
 type ResponseFunctionTool = {
     type: "function";
@@ -46,10 +45,7 @@ type ToolResponseResult = {
 type ToolChoice = "auto" | "required" | { type: "function"; name: string };
 type ResponseMessageContent = AiTextMessage["content"] | string;
 type ResponseInputContent = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
-type ResponseInputItem =
-    | { role: "system" | "user" | "assistant"; content: string | ResponseInputContent[] }
-    | { type: "function_call"; call_id: string; name: string; arguments: string }
-    | { type: "function_call_output"; call_id: string; output: string };
+type ResponseInputItem = { role: "system" | "user" | "assistant"; content: string | ResponseInputContent[] } | { type: "function_call"; call_id: string; name: string; arguments: string } | { type: "function_call_output"; call_id: string; output: string };
 type ResponseApiToolDefinition = {
     type: "function";
     name: string;
@@ -57,9 +53,7 @@ type ResponseApiToolDefinition = {
     parameters: Record<string, unknown>;
     strict?: boolean;
 };
-type ResponseApiOutputItem =
-    | { type?: "message"; content?: Array<{ type?: string; text?: string }> }
-    | { type?: "function_call"; id?: string; call_id?: string; name?: string; arguments?: string };
+type ResponseApiOutputItem = { type?: "message"; content?: Array<{ type?: string; text?: string }> } | { type?: "function_call"; id?: string; call_id?: string; name?: string; arguments?: string };
 type ResponseApiPayload = {
     id?: string;
     output?: ResponseApiOutputItem[];
@@ -94,7 +88,7 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; runningHubWorkflowBindings?: { image: RunningHubNodeBinding[]; video: RunningHubNodeBinding[]; audio: RunningHubNodeBinding[] }; runningHubWorkflowRunOptions?: RunningHubWorkflowRunOptions };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -108,21 +102,26 @@ const QUALITY_ALIASES: Record<string, string> = {
     "2k": "medium",
     "4k": "high",
 };
+const IMAGE_QUALITY_VALUES = new Set([...Object.keys(QUALITY_BASE), "xhigh", "max"]);
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
 const IMAGE_SIZE_STEP = 16;
 const IMAGE_MIN_PIXELS = 655360;
-const IMAGE_MAX_PIXELS = 8294400;
-const IMAGE_MAX_EDGE = 3840;
-const IMAGE_MAX_RATIO = 3;
+const IMAGE_MAX_PIXELS = GPT_IMAGE_2_MAX_PIXELS;
+const IMAGE_MAX_EDGE = GPT_IMAGE_2_MAX_EDGE;
+const IMAGE_MAX_RATIO = GPT_IMAGE_2_MAX_RATIO;
 const IMAGE_OUTPUT_FORMAT = "png";
+const IMAGE_REQUEST_TIMEOUT_MS = 10 * 60_000;
+const IMAGE_REQUEST_TIMEOUT_ERROR = "ImageRequestTimeoutError";
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
 const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
 
-function normalizeQuality(quality: string) {
+function normalizeQuality(quality: string, model?: string) {
     const value = quality.trim().toLowerCase();
     const normalized = QUALITY_ALIASES[value] || value;
-    return QUALITY_BASE[normalized] ? normalized : undefined;
+    if (!IMAGE_QUALITY_VALUES.has(normalized)) return undefined;
+    if ((normalized === "xhigh" || normalized === "max") && !isGptImage25Model(model || "")) return undefined;
+    return normalized;
 }
 
 /** Only "transparent" is forwarded; any other value (incl. empty) means keep the default opaque background. */
@@ -185,7 +184,7 @@ function validateImageSize(width: number, height: number) {
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error(apiText("imagePixelLimit"));
 }
 
-function resolveRequestSize(quality: string | undefined, size: string) {
+function resolveRequestSize(quality: string | undefined, imageResolution: string | undefined, size: string) {
     const value = size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
@@ -193,8 +192,20 @@ function resolveRequestSize(quality: string | undefined, size: string) {
         validateImageSize(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveSize(quality, value);
+    if (value.includes(":")) return imageSizeForResolution(imageResolution, value) || resolveSize(quality, value);
     throw new Error(apiText("invalidImageSizeFormat"));
+}
+
+/** RH 应用/工作流由其自身 nodeInfoList 决定输出规格，不能继承画布通用生图尺寸。 */
+function isRunningHubWorkflowOrApp(config: AiConfig, model: string) {
+    const resource = findChannelModel(config, model)?.model.runningHub;
+    return resource?.kind === "app" || resource?.kind === "workflow";
+}
+
+function resolveImageRequestSize(config: AiConfig, model: string, requestConfig: Pick<AiConfig, "apiFormat" | "model">, quality: string | undefined) {
+    if (isRunningHubWorkflowOrApp(config, model)) return undefined;
+    const isGptImage2 = isNativeCodexImageChannel(model, requestConfig) || requestConfig.model.trim().toLowerCase() === CODEX_IMAGE_MODEL;
+    return resolveRequestSize(quality, config.imageResolution, isGptImage2 ? fitGptImage2Size(config.size) || config.size : config.size);
 }
 
 function resolveGeminiImageConfig(config: AiConfig) {
@@ -202,7 +213,7 @@ function resolveGeminiImageConfig(config: AiConfig) {
     const dimensions = parseImageDimensions(value);
     const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
     const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
-    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions) : undefined;
+    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions, config.imageResolution) : undefined;
     const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
     return Object.keys(image).length ? { responseFormat: { image } } : {};
 }
@@ -217,10 +228,14 @@ function closestGeminiAspectRatio(value: string) {
     });
 }
 
-function resolveGeminiImageSize(quality: string, dimensions: { width: number; height: number } | null) {
+function resolveGeminiImageSize(quality: string, dimensions: { width: number; height: number } | null, imageResolution?: string) {
     const normalizedQuality = normalizeQuality(quality);
     if (normalizedQuality) return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
+    const configuredResolution = normalizeImageResolution(imageResolution);
+    if (configuredResolution !== "auto") return configuredResolution.toUpperCase();
     if (!dimensions) return undefined;
+    const presetResolution = inferImageResolution(`${dimensions.width}x${dimensions.height}`);
+    if (presetResolution !== "auto") return presetResolution.toUpperCase();
     const edge = Math.max(dimensions.width, dimensions.height);
     if (edge <= 768) return "512";
     if (edge <= 1536) return "1K";
@@ -248,10 +263,7 @@ function parseImagePayload(payload: ImageApiResponse) {
         throw new Error(payload.msg || apiText("requestFailed"));
     }
     // Support data, images, and results response fields used by different APIs.
-    const imageList = payload.data
-        || (payload as Record<string, unknown>).images as Array<Record<string, unknown>> | undefined
-        || (payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined
-        || [];
+    const imageList = payload.data || ((payload as Record<string, unknown>).images as Array<Record<string, unknown>> | undefined) || ((payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined) || [];
     const images = imageList
         .map(resolveImageSource)
         .filter((value): value is string => Boolean(value))
@@ -260,9 +272,7 @@ function parseImagePayload(payload: ImageApiResponse) {
     if (images.length === 0) {
         // Check whether the response contains data in an unrecognized format.
         const rawKeys = Object.keys(payload).filter((k) => k !== "code" && k !== "msg" && k !== "error");
-        throw new Error(rawKeys.length > 0
-            ? apiText("unknownImageResponse", { fields: rawKeys.join(", ") })
-            : apiText("noImageReturned"));
+        throw new Error(rawKeys.length > 0 ? apiText("unknownImageResponse", { fields: rawKeys.join(", ") }) : apiText("noImageReturned"));
     }
 
     return images;
@@ -287,22 +297,15 @@ function readApiErrorMessage(value: unknown): string {
     if (typeof value !== "object") return "";
     const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
     // error may be a string or an object containing a message.
-    const errorMsg =
-        typeof payload.error === "string"
-            ? payload.error
-            : (payload.error as { message?: unknown })?.message;
-    return (
-        readApiErrorMessage(payload.msg) ||
-        readApiErrorMessage(payload.message) ||
-        readApiErrorMessage(errorMsg) ||
-        readApiErrorMessage(payload.detail) ||
-        ""
-    );
+    const errorMsg = typeof payload.error === "string" ? payload.error : (payload.error as { message?: unknown })?.message;
+    return readApiErrorMessage(payload.msg) || readApiErrorMessage(payload.message) || readApiErrorMessage(errorMsg) || readApiErrorMessage(payload.detail) || "";
 }
 
 function readAxiosError(error: unknown, fallback: string) {
+    if (error instanceof Error && error.name === IMAGE_REQUEST_TIMEOUT_ERROR) return apiText("imageTimeout");
     if (axios.isCancel(error)) return apiText("requestCanceled");
     if (axios.isAxiosError(error)) {
+        if (!error.response && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT")) return apiText("imageTimeout");
         if (!error.response && error.code === "ERR_NETWORK") return apiText("requestFailed");
         const responseData = error.response?.data;
         // Prefer the API error from the response body.
@@ -341,6 +344,106 @@ function aiHeaders(config: AiConfig, contentType?: string) {
         Authorization: `Bearer ${config.apiKey}`,
         ...(contentType ? { "Content-Type": contentType } : {}),
     };
+}
+
+/** Codex 专用模型经 Canvas Agent 调用本机 CLI，不走兼容图片 API。 */
+function isNativeCodexImageChannel(model: string, config?: Pick<AiConfig, "apiFormat" | "model">) {
+    const decoded = decodeChannelModel(model);
+    const selectedModel = (decoded?.model || model).trim().toLowerCase();
+    const isCodexImageModel = (CODEX_IMAGE_MODELS as readonly string[]).includes(selectedModel);
+    return (decoded?.channelId === CODEX_IMAGE_CHANNEL_ID && isCodexImageModel) || (isCodexImageModel && config?.apiFormat === "codex-cli");
+}
+
+function isNativeCodexTextChannel(model: string) {
+    return decodeChannelModel(model)?.channelId === CODEX_TEXT_CHANNEL_ID;
+}
+
+type NativeCodexImageResponse = { ok?: boolean; images?: Array<{ dataUrl?: string }>; error?: string };
+type NativeCodexImageOptions = { model: string; size?: string; quality?: string };
+
+function imageRequestTimeoutError() {
+    const error = new Error(apiText("imageTimeout"));
+    error.name = IMAGE_REQUEST_TIMEOUT_ERROR;
+    return error;
+}
+
+async function fetchImageRequest(url: string, init: RequestInit, signal?: AbortSignal) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = () => controller.abort();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+    const timer = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, IMAGE_REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+        if (timedOut) throw imageRequestTimeoutError();
+        throw error;
+    } finally {
+        window.clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+    }
+}
+
+async function requestNativeCodexImages(prompt: string, references: ReferenceImage[], imageOptions: NativeCodexImageOptions, options?: RequestOptions) {
+    const attachments = await Promise.all(references.map(async (image) => ({ id: image.id, name: image.name, type: image.type, dataUrl: await imageToDataUrl(image) })));
+    let response: Response;
+    try {
+        response = await fetchImageRequest("/api/codex/imagegen", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ prompt, attachments, ...imageOptions }),
+        }, options?.signal);
+    } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (error instanceof Error && error.name === IMAGE_REQUEST_TIMEOUT_ERROR) throw error;
+        throw new Error("本地 Codex CLI 生图服务不可用，请确认当前画布服务已启动");
+    }
+    const payload = (await response.json().catch(() => ({}))) as NativeCodexImageResponse;
+    if (!response.ok) throw new Error(payload.error || apiText("requestFailed"));
+    const images = (payload.images || [])
+        .map((image) => image.dataUrl)
+        .filter((dataUrl): dataUrl is string => Boolean(dataUrl))
+        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+    if (!images.length) throw new Error(apiText("noImageReturned"));
+    return images;
+}
+
+type NativeCodexTextResponse = { ok?: boolean; text?: string; error?: string };
+
+async function requestNativeCodexText(model: string, messages: ResponseInputMessage[], options?: RequestOptions) {
+    const prompt = messages
+        .map((message) => {
+            if ("type" in message) return `function call ${message.name}:\n${message.arguments}`;
+            if (message.role === "tool") return `tool result:\n${message.content}`;
+            const content =
+                typeof message.content === "string"
+                    ? message.content
+                    : message.content
+                          .filter((item) => item.type === "text")
+                          .map((item) => item.text)
+                          .join("\n");
+            return content.trim() ? `${message.role}:\n${content.trim()}` : "";
+        })
+        .filter(Boolean)
+        .join("\n\n");
+    try {
+        const response = await fetch("/api/codex/text", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model, prompt }),
+            signal: options?.signal,
+        });
+        const payload = (await response.json().catch(() => ({}))) as NativeCodexTextResponse;
+        if (!response.ok) throw new Error(payload.error || apiText("requestFailed"));
+        return payload.text?.trim() || apiText("noContent");
+    } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        throw new Error(error instanceof Error ? error.message : "本机 Codex CLI 文本服务不可用，请确认当前画布服务已启动");
+    }
 }
 
 function geminiBaseUrl(config: Pick<AiConfig, "baseUrl">) {
@@ -523,12 +626,7 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
 }
 
 function toGeminiBody(config: AiConfig, messages: ResponseInputMessage[], extra?: Record<string, unknown>) {
-    const systemText = [
-        config.systemPrompt.trim(),
-        ...messages.flatMap((message) => (!("type" in message) && message.role === "system" ? [geminiTextContent(message.content)] : [])),
-    ]
-        .filter(Boolean)
-        .join("\n\n");
+    const systemText = [config.systemPrompt.trim(), ...messages.flatMap((message) => (!("type" in message) && message.role === "system" ? [geminiTextContent(message.content)] : []))].filter(Boolean).join("\n\n");
     const contents = toGeminiContents(messages.filter((message) => ("type" in message ? true : message.role !== "system")));
     return {
         contents,
@@ -588,10 +686,7 @@ function toGeminiToolOptions(tools: ResponseFunctionTool[], toolChoice: ToolChoi
         description: tool.function.description,
         parameters: tool.function.parameters,
     }));
-    const functionCallingConfig =
-        typeof toolChoice === "object"
-            ? { mode: "ANY", allowedFunctionNames: [toolChoice.name] }
-            : { mode: toolChoice === "required" ? "ANY" : "AUTO" };
+    const functionCallingConfig = typeof toolChoice === "object" ? { mode: "ANY", allowedFunctionNames: [toolChoice.name] } : { mode: toolChoice === "required" ? "ANY" : "AUTO" };
     return {
         tools: [{ functionDeclarations }],
         toolConfig: { functionCallingConfig },
@@ -692,7 +787,7 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
             ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
             contents: [{ role: "user", parts }],
         },
-        { headers: geminiHeaders(config), signal: options?.signal },
+        { headers: geminiHeaders(config), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS },
     );
     return parseGeminiImagePayload(response.data);
 }
@@ -714,12 +809,14 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const model = config.model || config.imageModel;
+    const requestConfig = resolveModelRequestConfig(config, model);
+    const quality = normalizeQuality(config.quality, requestConfig.model);
+    const requestSize = resolveImageRequestSize(config, model, requestConfig, quality);
+    if (isNativeCodexImageChannel(model, requestConfig)) return requestNativeCodexImages(withSystemPrompt(requestConfig, prompt), [], { model: requestConfig.model, size: requestSize, quality }, options);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
         try {
             const result = await runModelPlugin({
@@ -728,7 +825,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 config: requestConfig,
                 prompt: withSystemPrompt(requestConfig, prompt),
                 images: [],
-                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
+                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}), workflowValues: config.runningHubWorkflowValues || {}, runningHubWorkflowBindings: options?.runningHubWorkflowBindings, runningHubWorkflowRunOptions: options?.runningHubWorkflowRunOptions },
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
@@ -743,8 +840,6 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
     try {
         const response = await axios.post<ImageApiResponse>(
@@ -763,6 +858,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             {
                 headers: aiHeaders(requestConfig, "application/json"),
                 signal: options?.signal,
+                timeout: IMAGE_REQUEST_TIMEOUT_MS,
             },
         );
         const images = await parseImagePayload(response.data);
@@ -773,13 +869,15 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const model = config.model || config.imageModel;
+    const requestConfig = resolveModelRequestConfig(config, model);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
+    const quality = normalizeQuality(config.quality, requestConfig.model);
+    const requestSize = resolveImageRequestSize(config, model, requestConfig, quality);
+    if (isNativeCodexImageChannel(model, requestConfig)) return requestNativeCodexImages(withSystemPrompt(requestConfig, requestPrompt), references, { model: requestConfig.model, size: requestSize, quality }, options);
     const script = resolveModelScript(config, config.model || config.imageModel);
     if (script) {
-        const quality = normalizeQuality(config.quality);
-        const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
         const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {
@@ -789,7 +887,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 config: requestConfig,
                 prompt: withSystemPrompt(requestConfig, requestPrompt),
                 images: refs,
-                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}) },
+                params: { size: requestSize, quality, count: n, ...(background ? { background } : {}), workflowValues: config.runningHubWorkflowValues || {}, runningHubWorkflowBindings: options?.runningHubWorkflowBindings, runningHubWorkflowRunOptions: options?.runningHubWorkflowRunOptions },
                 signal: options?.signal,
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
@@ -805,8 +903,6 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         }
     }
 
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
     const formData = new FormData();
     formData.set("model", requestConfig.model);
@@ -827,10 +923,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         formData.set("background", background);
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => formData.append("image", file));
+    const imageField = files.length > 1 ? "image[]" : "image";
+    files.forEach((file) => formData.append(imageField, file));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
         const images = await parseImagePayload(response.data);
         return images;
     } catch (error) {
@@ -840,6 +937,12 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.textModel);
+    const messagesWithSystem = withSystemMessage(requestConfig, messages);
+    if (isNativeCodexTextChannel(config.model || config.textModel)) {
+        const answer = await requestNativeCodexText(requestConfig.model, messagesWithSystem, options);
+        onDelta(answer);
+        return answer;
+    }
     const script = resolveModelScript(config, config.model || config.textModel);
     if (script) {
         try {
@@ -847,7 +950,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
                 capability: "text",
                 script,
                 config: requestConfig,
-                messages: withSystemMessage(requestConfig, messages),
+                messages: messagesWithSystem,
                 signal: options?.signal,
                 onDelta,
             });
@@ -860,15 +963,23 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
     }
     try {
         if (requestConfig.apiFormat === "gemini") {
-            const answer = (await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messages), onDelta, options)).content || apiText("noContent");
+            const answer = (await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messagesWithSystem), onDelta, options)).content || apiText("noContent");
             if (answer === apiText("noContent")) onDelta(answer);
             return answer;
         }
-        const answer = (await requestStreamingResponse(requestConfig, {
-            model: requestConfig.model,
-            input: toResponseInput(withSystemMessage(requestConfig, messages)),
-            ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
-        }, onDelta, options)).content || apiText("noContent");
+        const answer =
+            (
+                await requestStreamingResponse(
+                    requestConfig,
+                    {
+                        model: requestConfig.model,
+                        input: toResponseInput(messagesWithSystem),
+                        ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
+                    },
+                    onDelta,
+                    options,
+                )
+            ).content || apiText("noContent");
         if (answer === apiText("noContent")) onDelta(answer);
         return answer;
     } catch (error) {
@@ -886,13 +997,13 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
                 .filter((id): id is string => Boolean(id))
                 .sort((a, b) => a.localeCompare(b));
         }
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
+        const response = await axios.get<{ data?: Array<{ id?: string; model?: string; name?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
             headers: {
                 Authorization: `Bearer ${config.apiKey}`,
             },
         });
         return (response.data.data || [])
-            .map((model) => model.id)
+            .map((model) => model.id || model.model || model.name)
             .filter((id): id is string => Boolean(id))
             .sort((a, b) => a.localeCompare(b));
     } catch (error) {
@@ -901,7 +1012,92 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
 }
 
 export async function fetchChannelModels(channel: ModelChannel) {
+    if (channel.apiFormat === "runninghub") {
+        try {
+            const response = await fetch("/api/runninghub/models", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ apiKey: channel.apiKey }),
+            });
+            const payload = (await response.json().catch(() => ({}))) as { data?: Array<{ id?: string; model?: string; name?: string } | string>; models?: Array<{ id?: string; model?: string; name?: string } | string>; error?: string };
+            if (!response.ok) throw new Error(payload.error || apiText("modelReadFailed"));
+            return [...(payload.data || []), ...(payload.models || [])]
+                .map((model) => (typeof model === "string" ? model : model.id || model.model || model.name || ""))
+                .map((model) => model.trim())
+                .filter(Boolean)
+                .filter((model, index, all) => all.indexOf(model) === index)
+                .sort((a, b) => a.localeCompare(b));
+        } catch (error) {
+            throw new Error(error instanceof Error ? error.message : apiText("modelReadFailed"));
+        }
+    }
     return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+}
+
+export type RunningHubCatalogModel = { name: string; capability: "image" | "video" | "audio"; target: string };
+
+/** 标准模型目录由 3102 本地服务从 RunningHub 官方 API 文档实时提取。 */
+export async function fetchRunningHubCatalog(channel: ModelChannel) {
+    try {
+        const response = await fetch("/api/runninghub/catalog", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ apiKey: channel.apiKey }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { data?: RunningHubCatalogModel[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || "无法读取 RunningHub 标准模型目录");
+        return (payload.data || []).filter((item) => item.name && item.target && ["image", "video", "audio"].includes(item.capability));
+    } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "无法读取 RunningHub 标准模型目录");
+    }
+}
+
+/** 读取 AI 应用 / 工作流的公开参数结构；调用使用消费级 Key，但不会创建任务。 */
+export async function fetchRunningHubWorkflowInfo(channel: ModelChannel, workflowId: string) {
+    try {
+        const response = await fetch("/api/runninghub/workflow-info", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ apiKey: channel.consumerApiKey, id: workflowId }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { data?: unknown; error?: string; message?: string; msg?: string };
+        if (!response.ok || (typeof payload === "object" && payload && "code" in payload && (payload as { code?: number }).code !== 0)) throw new Error(payload.error || payload.message || payload.msg || "无法读取 RunningHub 工作流参数");
+        return payload;
+    } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "无法读取 RunningHub 工作流参数");
+    }
+}
+
+/** 读取 RunningHub 工作流公开页面标题，不创建任务，也不需要消费级 Key。 */
+export async function fetchRunningHubWorkflowTitle(workflowId: string) {
+    try {
+        const response = await fetch("/api/runninghub/workflow-title", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: workflowId }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { title?: string; error?: string; message?: string };
+        if (!response.ok || !payload.title?.trim()) throw new Error(payload.error || payload.message || "无法读取 RunningHub 工作流标题");
+        return payload.title.trim();
+    } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "无法读取 RunningHub 工作流标题");
+    }
+}
+
+/** 读取 AI 应用公开的 nodeInfoList；仅查看字段，不创建远程任务。 */
+export async function fetchRunningHubAiAppInfo(channel: ModelChannel, appId: string) {
+    try {
+        const response = await fetch("/api/runninghub/app-info", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ apiKey: channel.consumerApiKey, id: appId }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { data?: unknown; error?: string; message?: string; msg?: string; code?: number };
+        if (!response.ok || payload.code !== undefined && payload.code !== 0) throw new Error(payload.error || payload.message || payload.msg || "无法读取 RunningHub AI 应用参数");
+        return payload;
+    } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "无法读取 RunningHub AI 应用参数");
+    }
 }
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {

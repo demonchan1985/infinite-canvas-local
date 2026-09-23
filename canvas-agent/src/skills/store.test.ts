@@ -40,6 +40,24 @@ test("创建、读取和更新画布专属 Skill", async (context) => {
     assert.deepEqual(updated.interface, { displayName: "产品九宫格生成" });
 });
 
+test("从 Markdown 导入本地 Skill", async (context) => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-skill-store-"));
+    context.after(() => fs.rm(workspace, { recursive: true, force: true }));
+    const store = new SkillStore(workspace);
+    const markdown = "---\nname: imported-demo\ndescription: 导入演示技能\n---\n\n# 导入演示\n\n执行导入的本地流程。\n";
+
+    const imported = await store.import({
+        source: "markdown",
+        fileName: "SKILL.md",
+        contentBase64: Buffer.from(markdown, "utf8").toString("base64"),
+    });
+
+    assert.equal(imported.name, "imported-demo");
+    assert.equal(imported.description, "导入演示技能");
+    assert.equal(imported.instructions, "# 导入演示\n\n执行导入的本地流程。");
+    assert.equal(imported.managed, true);
+});
+
 test("revision 不匹配时拒绝覆盖或删除", async (context) => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-skill-store-"));
     context.after(() => fs.rm(workspace, { recursive: true, force: true }));

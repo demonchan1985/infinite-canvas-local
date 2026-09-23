@@ -2,17 +2,20 @@ import axios from "axios";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
-import { dataUrlToFile } from "@/lib/image-utils";
-import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
+import { resolveVideoMode } from "@/lib/video-mode";
+import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
-import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, buildApiUrl, findChannelModel, modelOptionName, resolveModelRequestConfig, resolveModelScript, type AiConfig, type RunningHubNodeBinding } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
+import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+import type { RunningHubWorkflowRunOptions } from "@/types/canvas";
 
 type VideoResponse = { id: string; status?: string; error?: { message?: string }; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; referenceVideos?: ReferenceVideo[]; referenceAudios?: ReferenceAudio[]; videoMode?: "frames" | "reference"; videoFrameSlots?: { first?: boolean; last?: boolean }; runningHubWorkflowBindings?: { image: RunningHubNodeBinding[]; video: RunningHubNodeBinding[]; audio: RunningHubNodeBinding[] }; runningHubWorkflowRunOptions?: RunningHubWorkflowRunOptions };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
 export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
@@ -34,16 +37,29 @@ function aiHeaders(config: AiConfig, contentType?: string) {
 }
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
-    const task = await createVideoGenerationTask(config, prompt, references, options);
+    return waitForVideoGenerationTask(config, await createVideoGenerationTask(config, prompt, references, options), options);
+}
+
+export async function waitForVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         const state = await pollVideoGenerationTask(config, task, options);
         if (state.status === "completed") return state.result;
-        if (state.status === "failed") throw new Error(state.error);
+        if (state.status === "failed") throw videoTaskFailed(state.error);
         if (attempt === 119) throw new Error(apiText("videoTimeout", { provider: "" }));
         await delay(2500, options?.signal);
     }
     throw new Error(apiText("videoTimeout", { provider: "" }));
+}
+
+export function isVideoTaskFailed(error: unknown) {
+    return error instanceof Error && error.name === "VideoTaskFailed";
+}
+
+function videoTaskFailed(message: string) {
+    const error = new Error(message);
+    error.name = "VideoTaskFailed";
+    return error;
 }
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
@@ -69,6 +85,10 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
     if (!config.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
     if (!config.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
     const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const referenceVideos = await Promise.all((options?.referenceVideos || []).map((media) => mediaToDataUrl(media, "ref.mp4", "invalidReferenceVideo", options)));
+    const referenceAudios = await Promise.all((options?.referenceAudios || []).map((media) => mediaToDataUrl(media, "ref.mp3", "invalidReferenceAudio", options)));
+    const resource = findChannelModel(config, model)?.model.runningHub;
+    const isRunningHubResource = Boolean(resource);
     const result = videoPluginResult(
         await runModelPlugin({
             capability: "video",
@@ -83,6 +103,14 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
                 ratio: config.size,
                 generateAudio: boolConfig(config.videoGenerateAudio, true),
                 watermark: boolConfig(config.videoWatermark, false),
+                ...(isRunningHubResource ? {} : { mode: resolveVideoMode(config.videoMode, refs.length) }),
+                workflowValues: config.runningHubWorkflowValues || {},
+                referenceVideos,
+                referenceAudios,
+                videoMode: config.videoMode === "reference" ? "reference" : "frames",
+                videoFrameSlots: options?.videoFrameSlots,
+                runningHubWorkflowBindings: options?.runningHubWorkflowBindings,
+                runningHubWorkflowRunOptions: options?.runningHubWorkflowRunOptions,
             },
             signal: options?.signal,
         }),
@@ -92,9 +120,17 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
     return { id, provider: "plugin", model };
 }
 
+async function mediaToDataUrl(media: ReferenceVideo | ReferenceAudio, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
+    return readFileAsDataUrl(await referenceMediaToFile(media, fallbackName, errorKey, options));
+}
+
 function videoPluginResult(result: unknown): VideoGenerationResult {
     if (result instanceof Blob) return { blob: result };
     if (typeof result === "string") return { url: result, mimeType: "video/mp4" };
+    if (Array.isArray(result)) {
+        const url = result.find((value) => typeof value === "string" && value) as string | undefined;
+        if (url) return { url, mimeType: "video/mp4" };
+    }
     if (result && typeof result === "object") {
         const record = result as Record<string, unknown>;
         if (record.blob instanceof Blob) return { blob: record.blob };
@@ -117,6 +153,10 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 }
 
 async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+    const images = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const videos = await Promise.all((options?.referenceVideos || []).map((media) => referenceMediaToFile(media, "ref.mp4", "invalidReferenceVideo", options)));
+    const audios = await Promise.all((options?.referenceAudios || []).map((media) => referenceMediaToFile(media, "ref.mp3", "invalidReferenceAudio", options)));
+    const mode = resolveVideoMode(config.videoMode, images.length);
     const body = new FormData();
     body.append("model", modelOptionName(model));
     body.append("prompt", prompt);
@@ -124,8 +164,17 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
     body.append("resolution_name", normalizeVideoResolution(config.vquality));
     body.append("preset", "normal");
-    const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => body.append("input_reference[]", file));
+    body.append("generate_audio", String(boolConfig(config.videoGenerateAudio, true)));
+    body.append("watermark", String(boolConfig(config.videoWatermark, false)));
+    body.append("mode", mode);
+    if (mode === "frames") {
+        if (images[0]) body.append("first_frame", images[0], "first.png");
+        if (images[1]) body.append("last_frame", images[1], "last.png");
+    } else {
+        images.forEach((file) => body.append("image[]", file, "ref.png"));
+    }
+    videos.forEach((file) => body.append("video[]", file));
+    audios.forEach((file) => body.append("audio[]", file));
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config), signal: options?.signal })).data);
         if (!created.id) throw new Error(apiText("noVideoTaskId"));
@@ -133,6 +182,24 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskCreateFailed")));
     }
+}
+
+async function referenceMediaToFile(item: ReferenceVideo | ReferenceAudio, fallbackName: string, errorKey: "invalidReferenceVideo" | "invalidReferenceAudio", options?: RequestOptions) {
+    let blob = item.storageKey ? await getMediaBlob(item.storageKey) : null;
+    if (!blob) {
+        const url = item.storageKey ? await resolveMediaUrl(item.storageKey, item.url || "") : item.url || "";
+        if (!url) throw new Error(apiText(errorKey));
+        try {
+            const response = await fetch(url, { signal: options?.signal });
+            if (!response.ok) throw new Error("Reference media request failed");
+            blob = await response.blob();
+        } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") throw error;
+            throw new Error(apiText(errorKey));
+        }
+    }
+    if (!blob.size) throw new Error(apiText(errorKey));
+    return new File([blob], item.name || fallbackName, { type: item.type || blob.type || "application/octet-stream" });
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {

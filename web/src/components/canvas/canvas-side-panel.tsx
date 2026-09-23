@@ -1,8 +1,9 @@
-import { memo, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Empty, Input, Popconfirm, Select, Spin, Tag } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
+import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Settings2, Sparkles, Square, Trash2, Type, Video } from "lucide-react";
 import { motion } from "motion/react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
@@ -12,12 +13,13 @@ import { cn } from "@/lib/utils";
 import { PromptDetailDialog } from "@/pages/prompts/components/prompt-detail-dialog";
 import { fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
 import { uploadMediaFile } from "@/services/file-storage";
-import { uploadImage } from "@/services/image-storage";
-import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
+import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { assetCoverUrl, useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
 import { CANVAS_SIDE_PANEL_MAX_WIDTH, CANVAS_SIDE_PANEL_MIN_WIDTH, CANVAS_SIDE_PANEL_MOTION_MS, useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { useCanvasWorkspaceStore } from "@/stores/canvas/use-canvas-workspace-store";
 
 import type { InsertAssetPayload } from "./asset-picker-modal";
 
@@ -52,6 +54,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, onInsertAsset }: Props) {
     const { t } = useTranslation();
+    const navigate = useNavigate();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [tab, setTab] = useState<PanelTab>("canvas");
     const width = useCanvasSidePanelStore((state) => state.width);
@@ -60,6 +63,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
     const panelClosing = useCanvasSidePanelStore((state) => state.panelClosing);
     const setWidth = useCanvasSidePanelStore((state) => state.setWidth);
     const [resizing, setResizing] = useState(false);
+    const focusMode = useCanvasWorkspaceStore((state) => state.focusMode);
 
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
@@ -89,7 +93,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: panelOpen ? width + 1 : 0, opacity: panelOpen ? 1 : 0 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
-            style={{ overflow: "clip", pointerEvents: panelClosing ? "none" : undefined }}
+            style={{ display: focusMode ? "none" : undefined, overflow: "clip", pointerEvents: panelClosing ? "none" : undefined }}
         >
             <motion.aside
                 className="relative flex h-full shrink-0 flex-col overflow-hidden border-r"
@@ -103,6 +107,10 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                     <TabButton label={t("canvas.sidePanel.canvas")} active={tab === "canvas"} theme={theme} onClick={() => setTab("canvas")} />
                     <TabButton label={t("canvas.sidePanel.assets")} active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                     <TabButton label={t("canvas.sidePanel.prompts")} active={tab === "prompts"} theme={theme} onClick={() => setTab("prompts")} />
+                    <button type="button" onClick={() => navigate("/skills")} className="relative flex items-center gap-1 pb-1.5 text-sm font-semibold opacity-70 transition-opacity hover:opacity-100" style={{ color: theme.node.text }}>
+                        <Sparkles className="size-3.5" />
+                        {t("canvas.sidePanel.skills")}
+                    </button>
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">
                     {tab === "canvas" ? (
@@ -142,6 +150,7 @@ function nodePreviewText(node: CanvasNodeData) {
 function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, theme }: { nodes: CanvasNodeData[]; selectedNodeIds: Set<string>; onFocusNode: (nodeId: string) => void; onPreviewNode: (nodeId: string) => void; theme: CanvasTheme }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision, getImagePreviewRevision);
     const [keyword, setKeyword] = useState("");
     const [typeFilter, setTypeFilter] = useState<string>("all");
     const [selectMode, setSelectMode] = useState(false);
@@ -239,7 +248,7 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, th
                                     <button type="button" onClick={() => (selectMode ? toggleChecked(node.id) : onFocusNode(node.id))} className={cn("flex min-w-0 flex-1 items-center gap-3 py-2 pr-2 text-left", node.type === CanvasNodeType.Group && hasChildren ? "pl-0" : "pl-2")} title={selectMode ? undefined : t("canvas.sidePanel.focusNode")}>
                                         {selectMode ? <CheckMark checked={isChecked} theme={theme} /> : null}
                                         <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
-                                            {isImage ? <img src={node.metadata!.content} alt={node.title} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
+                                            {isImage ? <img src={previewUrlFor(node.metadata?.storageKey) || node.metadata!.content} alt={node.title} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
                                         </span>
                                         <span className="min-w-0 flex-1 space-y-0.5">
                                             <span className="block truncate text-sm font-medium leading-snug">{node.title || getNodeDefinition(node.type)?.title || t("canvas.node.untitled")}</span>
@@ -311,6 +320,7 @@ function buildInsertPayload(asset: Asset): InsertAssetPayload {
 const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision, getImagePreviewRevision);
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
@@ -457,7 +467,7 @@ function AssetCover({ asset }: { asset: Asset }) {
         if (asset.coverUrl) return <img src={asset.coverUrl} alt="" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
         return <video src={`${asset.data.url}#t=0.1`} muted playsInline preload="metadata" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
     }
-    return <img src={asset.coverUrl || asset.data.dataUrl} alt="" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
+    return <img src={assetCoverUrl(asset)} alt="" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
 }
 
 // ---------------------------------------------------------------------------

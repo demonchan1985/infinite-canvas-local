@@ -4,7 +4,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { localForageStorage } from "@/lib/localforage-storage";
-import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
+import type { CanvasBackgroundMode, CanvasBackgroundTone } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
 
 export type CanvasProject = {
@@ -17,6 +17,7 @@ export type CanvasProject = {
     chatSessions: CanvasAssistantSession[];
     activeChatId: string | null;
     backgroundMode: CanvasBackgroundMode;
+    backgroundTone: CanvasBackgroundTone;
     showImageInfo: boolean;
     viewport: ViewportTransform;
 };
@@ -30,7 +31,7 @@ type CanvasStore = {
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
     replaceProjects: (projects: CanvasProject[]) => void;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "backgroundTone" | "showImageInfo" | "viewport">>) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -78,6 +79,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     chatSessions: [],
                     activeChatId: null,
                     backgroundMode: "lines",
+                    backgroundTone: "neutral",
                     showImageInfo: false,
                     viewport: initialViewport,
                 };
@@ -96,6 +98,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     chatSessions: source.chatSessions || [],
                     activeChatId: source.activeChatId || null,
                     backgroundMode: source.backgroundMode || "lines",
+                    backgroundTone: source.backgroundTone || "neutral",
                     showImageInfo: source.showImageInfo || false,
                     viewport: source.viewport || initialViewport,
                 };

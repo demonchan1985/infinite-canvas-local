@@ -25,6 +25,22 @@ export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
+export type CanvasCreativePresetKind = "style" | "mj" | "motion" | "filter";
+
+export type CanvasCreativePreset = {
+    id: string;
+    kind: CanvasCreativePresetKind;
+    category: string;
+    name: string;
+    description: string;
+    prompt: string;
+    prefix?: string;
+    preview?: string;
+    poster?: string;
+};
+
+export type CanvasCreativePresetSelection = Partial<Record<CanvasCreativePresetKind, CanvasCreativePreset>>;
+
 export type CanvasNodeImage = {
     id: string;
     status: CanvasNodeStatus;
@@ -44,10 +60,39 @@ export type CanvasNodeText = {
     content: string;
 };
 
+export const canvasTextTagColors = ["gray", "blue", "green", "amber", "rose", "violet"] as const;
+
+export type CanvasTextTagColor = (typeof canvasTextTagColors)[number];
+
+export type CanvasTextTag = {
+    id: string;
+    label: string;
+    color: CanvasTextTagColor;
+};
+
+export type CanvasStoryboardRow = {
+    id: string;
+    duration: string;
+    shotPrompt: string;
+    dialogue: string;
+    asset: string;
+};
+
+/** RunningHub 工作流 /openapi/v2/run/workflow 的任务层参数，不属于 nodeInfoList。 */
+export type RunningHubWorkflowRunOptions = {
+    addMetadata?: boolean;
+    instanceType?: "default" | "plus" | "ultra";
+    usePersonalQueue?: boolean;
+    retainSeconds?: number;
+    webhookUrl?: string;
+};
+
 export type CanvasNodeMetadata = {
     content?: string;
     composerContent?: string;
     prompt?: string;
+    /** AIFISHER 非商用预设库中的节点级创作选择，随画布项目保存。 */
+    creativePresets?: CanvasCreativePresetSelection;
     status?: CanvasNodeStatus;
     errorDetails?: string;
     fontSize?: number;
@@ -57,15 +102,31 @@ export type CanvasNodeMetadata = {
     reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
     size?: string;
     quality?: string;
+    imageResolution?: string;
     background?: string;
     count?: number;
     textCount?: number;
     texts?: CanvasNodeText[];
     primaryTextId?: string;
+    /** 文本节点的本地分类标签，随画布项目保存。 */
+    textTags?: CanvasTextTag[];
+    storyboardMode?: boolean;
+    storyboardRows?: CanvasStoryboardRow[];
     seconds?: string;
     vquality?: string;
+    videoMode?: string;
     generateAudio?: string;
     watermark?: string;
+    /** 节点级 RunningHub 工作流参数，键为 nodeId.fieldName。 */
+    runningHubWorkflowValues?: Record<string, string | number | boolean>;
+    /** 当前画布节点显示的 RunningHub 参数键；未设置时显示工作流的全部参数。 */
+    runningHubWorkflowVisibleFieldKeys?: string[];
+    /** 是否手动展开 RunningHub 工作流的具名素材端口。 */
+    runningHubWorkflowPortsOpen?: boolean;
+    /** 当前画布节点启用的 RunningHub 素材槽位；为空数组表示本次不提交任何素材。未设置时按已连接素材自动启用。 */
+    runningHubWorkflowEnabledPorts?: string[];
+    /** 节点级 RunningHub 任务层选项，会和 nodeInfoList 一起提交。 */
+    runningHubWorkflowRunOptions?: RunningHubWorkflowRunOptions;
     audioVoice?: string;
     audioFormat?: string;
     audioSpeed?: string;
@@ -73,6 +134,7 @@ export type CanvasNodeMetadata = {
     references?: string[];
     naturalWidth?: number;
     naturalHeight?: number;
+    imageDisplayScale?: "standard-v2" | "primary-v1";
     freeResize?: boolean;
     images?: CanvasNodeImage[];
     primaryImageId?: string;
@@ -80,6 +142,8 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    videoTaskId?: string;
+    videoTaskProvider?: "openai";
     groupId?: string;
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
 };
@@ -98,6 +162,8 @@ export type CanvasConnection = {
     id: string;
     fromNodeId: string;
     toNodeId: string;
+    /** 目标节点的具名输入端口；RunningHub 工作流用它保存真实素材槽位。 */
+    toPort?: string;
 };
 
 export type CanvasAssistantReference = {
@@ -137,6 +203,8 @@ export type CanvasAssistantSession = {
 export type ConnectionHandle = {
     nodeId: string;
     handleType: "source" | "target";
+    /** 同一节点内的具名端口。未指定时保留普通节点级连线。 */
+    portId?: string;
 };
 
 export type SelectionBox = {

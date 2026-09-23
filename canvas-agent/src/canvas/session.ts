@@ -32,7 +32,6 @@ const SITE_TOOLS = new Set<ToolName>([
     "workbench_image_generate",
     "workbench_video_get_config",
     "workbench_video_generate",
-    "prompts_search",
     "assets_list",
     "assets_add",
     "generation_get_status",

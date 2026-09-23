@@ -1,0 +1,24 @@
+This project includes selected creative preset catalogs, prompt/style preview assets,
+and related adapted UI code migrated from AIFISHER. These files are separately
+licensed and are not covered by the upstream MIT license.
+
+Copyright (c) 2026 Work-Fisher and contributing copyright holders.
+License: AIFISHER Noncommercial Source License 1.0.
+
+Covered paths:
+- web/src/lib/canvas/aifisher-creative-catalog.json
+- web/src/lib/canvas/aifisher-mj-style-catalog.json
+- web/src/lib/canvas/canvas-creative-presets.ts
+- web/src/components/canvas/canvas-creative-tools.tsx
+- web/public/creative-presets/
+- web/public/mj-styles/
+
+The included AIFISHER-originated materials may be used, reproduced, inspected,
+modified and redistributed solely for noncommercial purposes. Redistribution must
+be free of charge and retain the AIFISHER license, copyright notices, third-party
+notices and a clear description of modifications. Commercial use, commercial
+derivative products, paid projects, paid hosting and SaaS are prohibited unless
+separately authorized in writing by the copyright holder.
+
+Modification: adapted catalog selection, prompt composition, and node UI for
+Infinite Canvas. The original AIFISHER prompt-library page is not included.

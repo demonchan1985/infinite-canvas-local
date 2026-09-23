@@ -3,7 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { cleanupUnusedImages, ensureImagePreview, previewUrlFor, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
 
 export type AssetKind = "text" | "image" | "video";
@@ -46,12 +46,14 @@ const assetStorage: PersistStorage<AssetStore> = {
             parsed.state.assets.map(async (asset) => {
                 if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
                 if (asset.kind !== "image") return asset;
-                if (asset.data.storageKey)
+                if (asset.data.storageKey) {
+                    void ensureImagePreview(asset.data.storageKey);
                     return {
                         ...asset,
                         coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
                         data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
                     };
+                }
                 if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
                 const image = await uploadImage(asset.data.dataUrl);
                 return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
@@ -103,3 +105,7 @@ export const useAssetStore = create<AssetStore>()(
         },
     ),
 );
+
+export function assetCoverUrl(asset: Asset) {
+    return asset.kind === "image" ? previewUrlFor(asset.data.storageKey) || asset.coverUrl || asset.data.dataUrl : asset.coverUrl;
+}

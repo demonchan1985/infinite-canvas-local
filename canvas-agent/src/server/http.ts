@@ -1,18 +1,21 @@
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 
 import { runClaudeTurn } from "../agent/claude.js";
 import { archiveCodexThread, CodexSkillLookupError, configureCodexSkill, generateCodexSkillDraft, interruptCodexTurn, isRecoverableThreadError, listCodexModels, listCodexSkills, listCodexThreads, readCodexThread, resolveCodexApproval, resolveCodexSkill, resumeCodexThread, runCodexTurn, startCodexThread, summarizeCodexThread } from "../agent/codex.js";
+import { buildCodexImageToolRequest, isCodexImage25Model, normalizeCodexImageModel, type CodexImageModel } from "../agent/codex-image-request.js";
 import type { CodexReasoningEffort, CodexSkillSelector } from "../agent/codex-protocol.js";
 import { messageMetadataStore } from "../agent/message-metadata.js";
 import type { AgentAttachment, AgentPermissionMode } from "../agent/types.js";
 import { AGENT_PROTOCOL_VERSION, CanvasSession } from "../canvas/session.js";
 import { DEFAULT_PORT, ensureSiteWorkspace, loadConfig, saveConfig, updateSiteWorkspace, type CanvasAgentConfig } from "../config.js";
 import { logger } from "../utils/logger.js";
-import { checkVersions } from "../version-check.js";
 import { SkillStore, SkillStoreError } from "../skills/store.js";
+
+const CODEX_IMAGEGEN_TIMEOUT_MS = 3 * 60 * 1000;
 
 /** 启动仅监听本机的 Canvas Agent HTTP 服务。 */
 export function startHttpServer() {
@@ -180,6 +183,17 @@ export function startHttpServer() {
         const result = await listCodexSkills(emit, workspace.workspacePath, String(req.query.forceReload || "") === "1");
         res.json({ ok: true, data: result.skills.map((skill) => ({ ...skill, managed: skillStore.isManagedPath(skill.path) })), errors: result.errors });
     }));
+    app.get("/agent/codex/skills/content", route(async (req, res) => {
+        const requestedPath = String(req.query.path || "");
+        const workspace = ensureSiteWorkspace(config);
+        const result = await listCodexSkills(emit, workspace.workspacePath, false);
+        const skill = result.skills.find((item) => item.path === requestedPath);
+        if (!skill) return res.status(404).json({ ok: false, error: "找不到指定 Skill" });
+        const file = await stat(skill.path);
+        if (!file.isFile()) return res.status(404).json({ ok: false, error: "Skill 文件无效" });
+        if (file.size > 1024 * 1024) return res.status(413).json({ ok: false, error: "Skill 内容超过 1MiB，无法在页面中预览" });
+        res.json({ ok: true, data: { path: skill.path, content: await readFile(skill.path, "utf8") } });
+    }));
     app.post("/agent/codex/skills/draft", codexMutation(async (req, res) => {
         const workspace = ensureSiteWorkspace(config);
         const source = String(req.body?.source || "");
@@ -218,6 +232,11 @@ export function startHttpServer() {
     }));
     app.post("/agent/codex/skills", codexMutation(async (req, res) => {
         const data = await skillStore.create(req.body);
+        session.emitAll("skills_changed", { forceReload: true });
+        res.status(201).json({ ok: true, data });
+    }));
+    app.post("/agent/codex/skills/import", codexMutation(async (req, res) => {
+        const data = await skillStore.import(req.body);
         session.emitAll("skills_changed", { forceReload: true });
         res.status(201).json({ ok: true, data });
     }));
@@ -399,6 +418,22 @@ export function startHttpServer() {
         }
     }));
 
+    /**
+     * 画布的本机 Codex 图像渠道专用入口。
+     * 不复用聊天线程，也不经由 OpenAI 兼容图片接口，避免图片任务进入 Agent 对话消耗。
+     */
+    app.post("/agent/codex/imagegen", route(async (req, res) => {
+        const prompt = String(req.body?.prompt || "").trim();
+        if (!prompt) return res.status(400).json({ ok: false, error: "请输入图片描述" });
+        const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments as AgentAttachment[] : [];
+        const workspace = ensureSiteWorkspace(config);
+        const model = normalizeCodexImageModel(req.body?.model);
+        const size = validCanvasImageSize(req.body?.size);
+        const quality = validCanvasImageQuality(req.body?.quality, model);
+        const images = await runLocalCodexCliImagegen(prompt, attachments, workspace.workspacePath, { model, size, quality });
+        res.json({ ok: true, images });
+    }));
+
     /** 将 Codex 写操作串行化，避免多窗口在异步请求期间交叉修改会话。 */
     function codexMutation(handler: (req: Request, res: Response) => unknown | Promise<unknown>) {
         return route(async (req, res) => {
@@ -433,12 +468,9 @@ export function startHttpServer() {
 
     app.listen(port, "127.0.0.1", () => {
         console.log("Infinite Canvas Agent");
-        checkVersions();
+        // 独立版不查询或推荐上游升级，避免误启动原版 Agent。
         console.log(`Local URL: ${config.url}`);
-        console.log(`Connect token: ${config.token}`);
-        console.log("Codex MCP is not installed by this command.");
-        console.log("Optional MCP add: codex mcp add infinite-canvas -- npx -y @basketikun/canvas-agent mcp");
-        console.log("Remove manually added MCP: codex mcp remove infinite-canvas");
+        console.log("独立 Agent：连接信息由独立启动器通过 URL fragment 传递；未安装或修改原版 MCP。");
         if (logger.enabled) console.log(`Debug log: ${logger.filePath}`);
         logger.info("Canvas Agent started", { url: config.url, workspace: ensureSiteWorkspace(config).workspacePath, debugLog: logger.filePath });
         const activeThreadId = initialWorkspace.activeThreadId || "";
@@ -545,4 +577,151 @@ function withAttachmentContext(prompt: string, attachments: Array<{ id: string; 
     if (!attachments.length) return prompt;
     const list = attachments.map((item, index) => `${index + 1}. attachmentId=${item.id}, name=${JSON.stringify(item.name)}`).join("\n");
     return `${prompt}\n\n本轮可用图片附件（顺序与图片输入一致）：\n${list}\n需要把附件放入画布或作为生成参考图时，先调用 canvas_create_attachment_nodes，再使用返回的画布节点 ID 创建生成流程。`;
+}
+
+/** 独立调用具备原生尺寸参数的 Codex 图片 CLI，不占用或关联画布聊天 Agent 的线程。 */
+async function runLocalCodexCliImagegen(prompt: string, attachments: AgentAttachment[], cwd: string, imageOptions: { model: CodexImageModel; size?: string; quality?: string }) {
+    const temporaryDir = await mkdtemp(path.join(os.tmpdir(), "canvas-codex-imagegen-"));
+    try {
+        const outputPath = path.join(temporaryDir, "generated.png");
+        const referenceCount = attachments.filter((item) => item.dataUrl?.startsWith("data:image/")).length;
+        const preserveReferenceAppearance = referenceCount > 0 && !hasOutfitChangeRequest(prompt);
+        const requestPrompt = [
+            "Use only this request and its attached reference images. Do not use, mention, or inherit conversation history.",
+            preserveReferenceAppearance ? "REFERENCE LOCK — preserve the subject identity and the exact visible outfit from the reference: garment construction, neckline, exposed or covered areas, materials, color palette, layering, accessories, fit, and the way every garment is worn. Do not replace it with a generic, modest, white, or standardized outfit. For a turnaround or multi-view, every view must show this same original outfit." : "",
+            imageOptions.size ? `Create the exact ${imageOptions.size} pixel canvas requested. Compose for the full canvas and do not use a default ratio.` : "",
+            "\nUser request:",
+            prompt,
+        ].filter(Boolean).join("\n");
+        const output = isCodexImage25Model(imageOptions.model)
+            ? await runCodexImage25Skill(path.join(temporaryDir, "request.json"), outputPath, requestPrompt, attachments, imageOptions, cwd)
+            : await runCodexImageSkill(requestPrompt, await writeCliReferenceImages(temporaryDir, attachments), outputPath, imageOptions, cwd);
+        if (output.code !== 0) throw new Error(`本机 Codex ${imageOptions.model} 图片请求失败（未回退到其它模型）：${(output.stderr || output.stdout || `exit=${output.code}`).slice(-1200)}`);
+        const imagePath = output.imagePath || outputPath;
+        return [{ dataUrl: localImageDataUrl(imagePath, await readFile(imagePath)) }];
+    } finally {
+        await rm(temporaryDir, { recursive: true, force: true });
+    }
+}
+
+async function writeCliReferenceImages(dir: string, attachments: AgentAttachment[]) {
+    return Promise.all(attachments.filter((item) => item.dataUrl?.startsWith("data:image/")).map(async (item, index) => {
+        const dataUrl = item.dataUrl || "";
+        const [, mime = "", data = ""] = dataUrl.match(/^data:([^;]+);base64,(.+)$/) || [];
+        if (!data) throw new Error(`图片附件无效：${item.name || "未命名图片"}`);
+        const filePath = path.join(dir, `reference-${index + 1}.${imageExtension(mime || item.type || "")}`);
+        await writeFile(filePath, Buffer.from(data, "base64"));
+        return filePath;
+    }));
+}
+
+async function runCodexImage25Skill(requestPath: string, outputPath: string, prompt: string, attachments: AgentAttachment[], imageOptions: { model: CodexImageModel; size?: string; quality?: string }, cwd: string) {
+    await writeFile(requestPath, JSON.stringify(buildCodexImageToolRequest(prompt, attachments, imageOptions)));
+    return runCodexImageCommand(["--json", "--provider", "codex", "request", "create", "--request-operation", "responses", "--body-file", requestPath, "--out-image", outputPath, "--expect-image"], cwd);
+}
+
+function runCodexImageSkill(prompt: string, imagePaths: string[], outputPath: string, imageOptions: { size?: string; quality?: string }, cwd: string) {
+    const executable = process.env.GPT_IMAGE_2_SKILL_BIN || path.join(os.homedir(), ".local", "node", "bin", "gpt-image-2-skill");
+    const args = ["--json", "--provider", "codex", "images", imagePaths.length ? "edit" : "generate", "--prompt", prompt, "--out", outputPath, "--size", imageOptions.size || "auto", "--quality", imageOptions.quality || "auto", "--format", "png"];
+    if (imagePaths.length) imagePaths.forEach((filePath) => args.push("--ref-image", filePath));
+    return runCodexImageCommand(args, cwd, executable);
+}
+
+function runCodexImageCommand(args: string[], cwd: string, executable = process.env.GPT_IMAGE_2_SKILL_BIN || path.join(os.homedir(), ".local", "node", "bin", "gpt-image-2-skill")) {
+    return new Promise<{ code: number; stdout: string; stderr: string; imagePath?: string }>((resolve, reject) => {
+        // LaunchAgent 的默认 PATH 不含用户 Node 目录；codex 启动脚本使用 `env node`。
+        const nodeBin = path.dirname(process.execPath);
+        const child = spawn(executable, args, {
+            cwd,
+            detached: true,
+            stdio: ["pipe", "pipe", "pipe"],
+            env: { ...process.env, PATH: [nodeBin, process.env.PATH || ""].filter(Boolean).join(path.delimiter) },
+        });
+        let stdout = "";
+        let stderr = "";
+        const timeout = setTimeout(() => {
+            try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+            const detail = (stderr || stdout).trim().slice(-800);
+            reject(new Error(`本机 Codex 原生图片请求超过 3 分钟未完成，已停止此次任务${detail ? `：${detail}` : ""}`));
+        }, CODEX_IMAGEGEN_TIMEOUT_MS);
+        child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+        child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+        child.once("error", (error) => { clearTimeout(timeout); reject(error); });
+        child.once("close", (code) => {
+            clearTimeout(timeout);
+            resolve({ code: code ?? 1, stdout, stderr, imagePath: codexImageOutputPath(stdout) });
+        });
+    });
+}
+
+/** 工具有时会将 --out 规范化到自己的 assets/output 目录，优先读取其 JSON 响应的真实路径。 */
+function codexImageOutputPath(stdout: string) {
+    try {
+        const imagePath = findImageOutputPath(JSON.parse(stdout) as unknown);
+        if (imagePath) return imagePath;
+    } catch { /* stdout may be JSONL with progress lines */ }
+    for (const line of stdout.split("\n").reverse()) {
+        try {
+            const value = JSON.parse(line) as unknown;
+            const imagePath = findImageOutputPath(value);
+            if (imagePath) return imagePath;
+        } catch { /* ignore non-JSON progress lines */ }
+    }
+    return undefined;
+}
+
+function findImageOutputPath(value: unknown): string | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const imagePath = findImageOutputPath(item);
+            if (imagePath) return imagePath;
+        }
+        return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    if (typeof record.output_path === "string" && /\.(?:jpe?g|png|webp)$/i.test(record.output_path)) return record.output_path;
+    if (typeof record.image_path === "string" && /\.(?:jpe?g|png|webp)$/i.test(record.image_path)) return record.image_path;
+    for (const key of ["output", "outputs"]) {
+        const imagePath = findImageOutputPath(record[key]);
+        if (imagePath) return imagePath;
+    }
+    if (typeof record.path === "string" && /\.(?:jpe?g|png|webp)$/i.test(record.path)) return record.path;
+    for (const [key, item] of Object.entries(record)) {
+        if (key === "reference_images" || key === "output" || key === "outputs" || key === "output_path" || key === "image_path") continue;
+        const imagePath = findImageOutputPath(item);
+        if (imagePath) return imagePath;
+    }
+    return undefined;
+}
+
+function localImageDataUrl(filePath: string, data: Buffer) {
+    const extension = path.extname(filePath).toLowerCase();
+    const mimeType = extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : extension === ".webp" ? "image/webp" : "image/png";
+    return `data:${mimeType};base64,${data.toString("base64")}`;
+}
+
+function imageExtension(type: string) {
+    if (type.includes("png")) return "png";
+    if (type.includes("webp")) return "webp";
+    return "jpg";
+}
+
+function validCanvasImageSize(value: unknown) {
+    const match = typeof value === "string" ? value.match(/^(\d{1,4})x(\d{1,4})$/i) : null;
+    if (!match) return undefined;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (width < 1 || height < 1 || width > 3840 || height > 3840) return undefined;
+    return `${width}x${height}`;
+}
+
+function validCanvasImageQuality(value: unknown, model: CodexImageModel) {
+    if (value !== "low" && value !== "medium" && value !== "high" && value !== "xhigh" && value !== "max") return undefined;
+    return (value === "xhigh" || value === "max") && !isCodexImage25Model(model) ? undefined : value;
+}
+
+/** 用户明确要求换装时才允许参考图服装改变。 */
+function hasOutfitChangeRequest(prompt: string) {
+    return /换装|更换.{0,8}(?:服装|衣服|穿搭)|(?:服装|衣服|穿搭).{0,8}(?:更换|替换)|(?:change|replace)\s+(?:the\s+)?outfit/i.test(prompt);
 }

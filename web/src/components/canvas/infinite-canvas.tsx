@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
-import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
+import { canvasBackgroundPalette, canvasGridStroke, type CanvasBackgroundMode, type CanvasBackgroundTone } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ViewportTransform } from "@/types/canvas";
 
@@ -9,6 +9,7 @@ type InfiniteCanvasProps = {
     viewport: ViewportTransform;
     tool: "select" | "pan";
     backgroundMode?: CanvasBackgroundMode;
+    backgroundTone?: CanvasBackgroundTone;
     onViewportChange: (viewport: ViewportTransform) => void;
     onCanvasMouseDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
     onCanvasDeselect?: () => void;
@@ -18,8 +19,9 @@ type InfiniteCanvasProps = {
     children: React.ReactNode;
 };
 
-export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = "lines", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = "lines", backgroundTone = "neutral", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
+    const colorTheme = useThemeStore((state) => state.theme);
+    const background = canvasBackgroundPalette(colorTheme, backgroundTone);
     const panState = useRef({
         isPanning: false,
         startX: 0,
@@ -71,7 +73,6 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             setIsControlPressed(false);
             panState.current.isPanning = false;
             setIsPanning(false);
-            document.body.style.cursor = "";
         };
 
         window.addEventListener("keydown", handleKeyDown);
@@ -128,7 +129,6 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
                 startedOnBackground: isBackgroundClick,
             };
             setIsPanning(true);
-            document.body.style.cursor = "grabbing";
             return;
         }
 
@@ -175,7 +175,6 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             }
             panState.current.isPanning = false;
             setIsPanning(false);
-            document.body.style.cursor = "";
         };
 
         window.addEventListener("pointermove", handlePointerMove);
@@ -185,7 +184,6 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             window.removeEventListener("pointermove", handlePointerMove);
             window.removeEventListener("pointerup", handlePointerUp);
             window.removeEventListener("pointercancel", handlePointerUp);
-            document.body.style.cursor = "";
         };
     }, [onCanvasDeselect, onViewportChange]);
 
@@ -205,21 +203,25 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
 
     const temporaryTool = isControlPressed || isSpacePressed;
     const activeTool = temporaryTool ? (tool === "select" ? "pan" : "select") : tool;
-    const cursor = isPanning ? "grabbing" : activeTool === "pan" ? "grab" : undefined;
 
     return (
         <div
             ref={containerRef}
             className="relative h-full w-full select-none overflow-hidden"
-            style={{ background: theme.canvas.background, cursor }}
+            data-canvas-tool={activeTool}
+            data-canvas-panning={isPanning || undefined}
+            style={{ background: background.background }}
             onPointerDown={handlePointerDown}
             onDoubleClick={handleDoubleClick}
             onWheel={handleWheel}
             onContextMenu={onContextMenu}
-            onDragOver={(event) => event.preventDefault()}
+            onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+            }}
             onDrop={onDrop}
         >
-            <CanvasGrid viewport={viewport} mode={backgroundMode} />
+            <CanvasGrid viewport={viewport} mode={backgroundMode} tone={backgroundTone} />
             <div
                 className="absolute origin-top-left"
                 style={{
@@ -232,20 +234,21 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
     );
 }
 
-function CanvasGrid({ viewport, mode }: { viewport: ViewportTransform; mode: CanvasBackgroundMode }) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+function CanvasGrid({ viewport, mode, tone }: { viewport: ViewportTransform; mode: CanvasBackgroundMode; tone: CanvasBackgroundTone }) {
+    const colorTheme = useThemeStore((state) => state.theme);
+    const background = canvasBackgroundPalette(colorTheme, tone);
     if (mode === "blank") return null;
 
     const gridSize = 48 * viewport.k;
     const x = viewport.x % gridSize;
     const y = viewport.y % gridSize;
-    const dotSize = viewport.k < 0.12 ? 0.8 : 1.15;
+    const dotSize = canvasGridStroke.dotDiameter(viewport.k);
     const backgroundImage =
-        mode === "dots" ? `radial-gradient(circle, ${theme.canvas.dot} ${dotSize}px, transparent ${dotSize + 0.2}px)` : `linear-gradient(${theme.canvas.line} 1px, transparent 1px), linear-gradient(90deg, ${theme.canvas.line} 1px, transparent 1px)`;
+        mode === "dots" ? `radial-gradient(circle, ${background.dot} ${dotSize}px, transparent ${dotSize + 0.12}px)` : `linear-gradient(${background.line} ${canvasGridStroke.lineWidth}px, transparent ${canvasGridStroke.lineWidth}px), linear-gradient(90deg, ${background.line} ${canvasGridStroke.lineWidth}px, transparent ${canvasGridStroke.lineWidth}px)`;
 
     return (
         <div
-            className="pointer-events-none absolute inset-0 opacity-40"
+            className={`pointer-events-none absolute inset-0 ${mode === "dots" ? "opacity-60" : "opacity-75"}`}
             style={{
                 backgroundImage,
                 backgroundSize: `${gridSize}px ${gridSize}px`,

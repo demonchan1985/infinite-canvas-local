@@ -56,6 +56,7 @@ type AgentStore = {
     silentConnect: boolean;
     fragmentBootstrap: boolean;
     prompt: string;
+    autoSubmitPrompt: boolean;
     attachments: AgentAttachment[];
     canvasReferences: CanvasResourceReference[];
     sending: boolean;
@@ -101,13 +102,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     panelMounted: true,
     panelClosing: false,
     canvasContext: null,
-    url: typeof window === "undefined" ? "http://127.0.0.1:17371" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17371",
+    url: typeof window === "undefined" ? "http://127.0.0.1:17375" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17375",
     token: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-token") || "",
     connected: false,
     enabled: false,
     silentConnect: false,
     fragmentBootstrap: false,
     prompt: "",
+    autoSubmitPrompt: false,
     attachments: [],
     canvasReferences: [],
     sending: false,
@@ -165,7 +167,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         agentSource = null;
         if (connectTimer) clearTimeout(connectTimer);
         connectTimer = null;
-        set({ enabled: false, connected: false, silentConnect: false, fragmentBootstrap: false, activity: i18n.t("agent.state.offline"), conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} }, bootstrapStatus: null, mcpStartupStatuses: {}, ...patch });
+        set({ enabled: false, connected: false, silentConnect: false, fragmentBootstrap: false, autoSubmitPrompt: false, activity: i18n.t("agent.state.offline"), conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} }, bootstrapStatus: null, mcpStartupStatuses: {}, ...patch });
     },
     addMessage: (item) => set((state) => ({ messages: [...state.messages, item] })),
     addEventLog: (item) => set((state) => ({ eventLogs: [...state.eventLogs.slice(-160), item] })),

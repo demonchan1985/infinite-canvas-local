@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
-import { Button, Dropdown, Modal, Tooltip } from "antd";
+import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Redo2, Scan, Search, Settings2, Trash2, Undo2, Upload, Workflow } from "lucide-react";
+import { Dropdown, Modal, Popover, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
+import { RunningHubAccountBalance } from "@/components/layout/runninghub-account-balance";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
+import { useCanvasWorkspaceStore } from "@/stores/canvas/use-canvas-workspace-store";
 
 export function CanvasTopBar({
     title,
@@ -26,6 +28,8 @@ export function CanvasTopBar({
     onExportProject,
     onImportImage,
     onOpenPlugins,
+    onImportRunningHubWorkflow,
+    onOpenWorkflowLibrary,
     onUndo,
     onRedo,
     agentOpen,
@@ -48,6 +52,8 @@ export function CanvasTopBar({
     onExportProject: () => void;
     onImportImage: () => void;
     onOpenPlugins: () => void;
+    onImportRunningHubWorkflow: () => void;
+    onOpenWorkflowLibrary: () => void;
     onUndo: () => void;
     onRedo: () => void;
     agentOpen: boolean;
@@ -61,6 +67,9 @@ export function CanvasTopBar({
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const sidePanelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const toggleSidePanel = useCanvasSidePanelStore((state) => state.togglePanel);
+    const setSearchOpen = useCanvasWorkspaceStore((state) => state.setSearchOpen);
+    const setFocusMode = useCanvasWorkspaceStore((state) => state.setFocusMode);
+    const panelStyle = { background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 8px 28px rgba(0,0,0,.12)" };
 
     useEffect(() => {
         if (!isTitleEditing) return;
@@ -73,8 +82,8 @@ export function CanvasTopBar({
 
     return (
         <>
-            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between pl-1 pr-4">
-                <div className="pointer-events-auto flex min-w-0 items-center gap-2">
+            <div className="pointer-events-none absolute inset-x-3 top-3 z-50 flex items-start justify-between gap-2 @min-[600px]:inset-x-4" data-canvas-chrome>
+                <div className="pointer-events-auto flex h-11 min-w-0 items-center gap-1 rounded-2xl px-2 backdrop-blur-xl" style={panelStyle}>
                     <Tooltip title={sidePanelOpen ? t("canvas.collapsePanel") : t("canvas.expandPanel")}>
                         <button
                             type="button"
@@ -121,39 +130,41 @@ export function CanvasTopBar({
                                     if (event.key === "Enter") onFinishTitleEditing();
                                     if (event.key === "Escape") onCancelTitleEditing();
                                 }}
-                                className="max-w-[280px] bg-transparent p-0 text-left text-lg font-semibold tracking-normal outline-none"
+                                className="w-28 max-w-[200px] bg-transparent p-0 text-left text-sm font-medium outline-none @min-[600px]:w-48"
                                 style={{ color: theme.node.text }}
                             />
                         ) : (
                             <button
                                 type="button"
-                                className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current"
-                                onDoubleClick={onStartTitleEditing}
-                                title={t("canvas.renameHint")}
+                                className="max-w-24 truncate px-1 text-left text-sm font-medium transition hover:opacity-70 @min-[600px]:max-w-[200px]"
+                                onClick={onStartTitleEditing}
+                                title="点击修改画布名称"
+                                style={{ overflow: "hidden" }}
                             >
                                 {title}
                             </button>
                         )}
                     </div>
-                    <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
+                    <button type="button" className="hidden size-7 place-items-center rounded-lg opacity-50 hover:opacity-100 @min-[600px]:grid" aria-label="重命名画布" onClick={onStartTitleEditing}><Pencil className="size-3.5" /></button>
+                    <span className="hidden @min-[1000px]:block"><CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /></span>
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5">
-                    <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} onOpenPlugins={onOpenPlugins} />
-                    <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
-                    <Button
-                        type="text"
-                        className="!h-10 !rounded-xl !px-3 !font-medium"
-                        style={{ background: agentOpen ? theme.toolbar.activeBg : theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                        icon={<Bot className="size-4" />}
-                        onClick={onToggleAgent}
-                    >
-                        Agent
-                    </Button>
+                <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-0.5 rounded-2xl px-1.5 backdrop-blur-xl" style={panelStyle}>
+                    <Tooltip title="搜索节点（⌘K）"><button type="button" aria-label="搜索画布节点" onClick={() => setSearchOpen(true)} className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Search className="size-4" /></button></Tooltip>
+                    <Popover trigger="click" placement="bottomRight" title="画布设置" content={<UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} onOpenPlugins={onOpenPlugins} />}><button type="button" aria-label="画布设置" className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Settings2 className="size-4" /></button></Popover>
+                    <Tooltip title="专注模式（⇧⌘F）"><button type="button" aria-label="进入专注模式" onClick={() => setFocusMode(true)} className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Scan className="size-4" /></button></Tooltip>
+                    <Tooltip title="工作流节点库"><button type="button" aria-label="工作流节点库" onClick={onOpenWorkflowLibrary} className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Workflow className="size-4" /></button></Tooltip>
+                    <Tooltip title="导入 RunningHub 工作流或 AI 应用"><button type="button" aria-label="导入 RunningHub 工作流或 AI 应用" onClick={onImportRunningHubWorkflow} className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Upload className="size-4" /></button></Tooltip>
+                    <RunningHubAccountBalance />
+                    <span className="mx-1 h-4 w-px" style={{ background: theme.toolbar.border }} />
+                    <button type="button" aria-label="Agent" aria-pressed={agentOpen} onClick={onToggleAgent} className="flex h-8 items-center gap-2 rounded-lg px-2 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10" style={agentOpen ? { background: theme.toolbar.activeBg } : undefined}><Bot className="size-4" /><span className="hidden @min-[600px]:inline">Agent</span></button>
                 </div>
             </div>
             <Modal title={t("canvas.shortcuts")} open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
                 <div className="space-y-2 border-t pt-4 text-sm" style={{ borderColor: theme.node.stroke }}>
+                    <Shortcut keys={["⌘ / Ctrl", "K"]} value="搜索节点" />
+                    <Shortcut keys={["⌘ / Ctrl", "Shift", "F"]} value="切换专注模式" />
+                    <Shortcut keys={["Shift", "1"]} value="适应全部节点" />
                     <Shortcut keys={["Ctrl / Space", t("canvas.shortcut.drag")]} value={t("canvas.shortcut.toggleTool")} />
                     <Shortcut keys={[t("canvas.shortcut.wheel")]} value={t("canvas.shortcut.zoom")} />
                     <Shortcut keys={[t("canvas.shortcut.zoomSlider")]} value={t("canvas.shortcut.preciseZoom")} />

@@ -6,7 +6,6 @@ import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
-import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
 import type { AppLocale } from "@/i18n";
 import { exportAppConfig, importAppConfig } from "@/services/config-file";
@@ -50,7 +49,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const { message } = App.useApp();
     const { i18n, t } = useTranslation();
     const configInputRef = useRef<HTMLInputElement>(null);
-    const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
+    const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab === "prompt-sources" ? "channels" : initialTab);
     const [editingChannelId, setEditingChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
     const [syncingWebdav, setSyncingWebdav] = useState(false);
@@ -66,14 +65,14 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const webdavReady = Boolean(webdav.url.trim());
     const editingChannel = config.channels.find((channel) => channel.id === editingChannelId) || null;
     const locale = i18n.resolvedLanguage as AppLocale;
-    useEffect(() => setActiveTab(initialTab), [initialTab]);
+    useEffect(() => setActiveTab(initialTab === "prompt-sources" ? "channels" : initialTab), [initialTab]);
 
     const saveConfig = (nextConfig: AiConfig) => {
         (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => updateConfig(key, nextConfig[key]));
     };
 
     const finishConfig = () => {
-        const ready = config.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length);
+        const ready = config.channels.some((channel) => channel.models.length && (channel.apiFormat === "codex-cli" || (channel.baseUrl.trim() && channel.apiKey.trim())));
         setConfigDialogOpen(false);
         if (!ready) return;
         message.success(t(shouldPromptContinue ? "config.savedContinue" : "config.saved"));
@@ -264,11 +263,6 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         ),
                     },
                     {
-                        key: "prompt-sources",
-                        label: t("config.tabs.promptSources"),
-                        children: <ConfigPromptSources />,
-                    },
-                    {
                         key: "webdav",
                         label: "WebDAV",
                         children: (
@@ -386,6 +380,8 @@ function normalizeImageCount(value: string) {
 
 function apiFormatLabel(apiFormat: ApiCallFormat) {
     if (apiFormat === "gemini") return "Gemini";
+    if (apiFormat === "codex-cli") return "OpenAI CLI（Codex）";
+    if (apiFormat === "runninghub") return "RunningHub";
     return "OpenAI";
 }
 
