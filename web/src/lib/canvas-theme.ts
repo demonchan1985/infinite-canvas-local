@@ -121,6 +121,10 @@ export function canvasBackgroundPalette(theme: CanvasColorTheme, tone: CanvasBac
     return canvasBackgroundPalettes[theme][tone];
 }
 
+export function recentCanvasBackgroundTone(projects: readonly { updatedAt: string; backgroundTone: CanvasBackgroundTone }[]): CanvasBackgroundTone {
+    return projects.reduce<(typeof projects)[number] | undefined>((recent, project) => (!recent || project.updatedAt > recent.updatedAt ? project : recent), undefined)?.backgroundTone || "neutral";
+}
+
 export function canvasSurfacePalette(theme: CanvasColorTheme, tone: CanvasBackgroundTone) {
     return canvasBackgroundPalettes[theme][tone];
 }

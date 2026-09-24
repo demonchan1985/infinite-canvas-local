@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { composeCanvasCreativePrompt, creativePresetKindsForMode, findCanvasCreativePreset } from "../src/lib/canvas/canvas-creative-presets.ts";
+import { recentCanvasBackgroundTone } from "../src/lib/canvas-theme.ts";
 
 const homeSource = readFileSync(new URL("../src/pages/home/index.tsx", import.meta.url), "utf8");
+const homeStyles = readFileSync(new URL("../src/pages/home/home.css", import.meta.url), "utf8");
 const navigationSource = readFileSync(new URL("../src/constant/navigation-tools.ts", import.meta.url), "utf8");
 const routerSource = readFileSync(new URL("../src/router.tsx", import.meta.url), "utf8");
 const configModalSource = readFileSync(new URL("../src/components/layout/app-config-modal.tsx", import.meta.url), "utf8");
@@ -13,24 +15,37 @@ const imageWorkbenchSource = readFileSync(new URL("../src/pages/image/index.tsx"
 const videoWorkbenchSource = readFileSync(new URL("../src/pages/video/index.tsx", import.meta.url), "utf8");
 const canvasPromptPanelSource = readFileSync(new URL("../src/components/canvas/canvas-node-prompt-panel.tsx", import.meta.url), "utf8");
 const canvasCreativeToolsSource = readFileSync(new URL("../src/components/canvas/canvas-creative-tools.tsx", import.meta.url), "utf8");
-const creativePresetBrowserSource = canvasCreativeToolsSource.slice(
-    canvasCreativeToolsSource.indexOf("function CreativePresetBrowser"),
-    canvasCreativeToolsSource.indexOf("function MjPresetPicker"),
-);
-const mjPresetBrowserSource = canvasCreativeToolsSource.slice(
-    canvasCreativeToolsSource.indexOf("function MjPresetBrowser"),
-    canvasCreativeToolsSource.indexOf("function CreativePresetCard"),
-);
+const creativePresetBrowserSource = canvasCreativeToolsSource.slice(canvasCreativeToolsSource.indexOf("function CreativePresetBrowser"), canvasCreativeToolsSource.indexOf("function MjPresetPicker"));
+const mjPresetBrowserSource = canvasCreativeToolsSource.slice(canvasCreativeToolsSource.indexOf("function MjPresetBrowser"), canvasCreativeToolsSource.indexOf("function CreativePresetCard"));
 const logoOptionsSource = readFileSync(new URL("../public/logo-options.html", import.meta.url), "utf8");
 const logoSource = readFileSync(new URL("../public/logo.svg", import.meta.url), "utf8");
 const appTopNavSource = readFileSync(new URL("../src/components/layout/app-top-nav.tsx", import.meta.url), "utf8");
 const siteToolsSource = readFileSync(new URL("../src/lib/agent/agent-site-tools.ts", import.meta.url), "utf8");
 const canvasAgentSchemaSource = readFileSync(new URL("../../canvas-agent/src/canvas/schemas.ts", import.meta.url), "utf8");
 
-test("首页不再加载旧提示词库，也不使用点状背景", () => {
+test("A1 首页使用画布色卡与三幕节点舞台，不加载旧提示词库或点状背景", () => {
     assert.doesNotMatch(homeSource, /fetchPrompts/);
-    assert.doesNotMatch(homeSource, /radial-gradient/);
-    assert.match(homeSource, /nodeNativeTools/);
+    assert.doesNotMatch(homeStyles, /radial-gradient/);
+    assert.match(homeSource, /recentCanvasBackgroundTone/);
+    assert.match(homeSource, /canvasBackgroundPalette/);
+    assert.match(homeSource, /home-workspace/);
+    assert.match(homeSource, /sceneImages = \["style-538\.webp", "style-580\.webp", "style-611\.webp"\]/);
+    assert.match(homeSource, /6500/);
+    assert.match(homeSource, /prefers-reduced-motion/);
+    assert.match(homeSource, /visibilitychange/);
+    assert.match(homeSource, /home\.stage\.pause/);
+    assert.match(appTopNavSource, /!isHome/);
+    for (const name of ["538", "580", "611"]) {
+        assert.ok(existsSync(new URL(`../public/creative-presets/style-${name}.webp`, import.meta.url)));
+    }
+    assert.equal(recentCanvasBackgroundTone([]), "neutral");
+    assert.equal(
+        recentCanvasBackgroundTone([
+            { updatedAt: "2026-01-01", backgroundTone: "blue" },
+            { updatedAt: "2026-02-01", backgroundTone: "green" },
+        ]),
+        "green",
+    );
 });
 
 test("旧提示词库从导航、路由、配置和工作台入口退场", () => {

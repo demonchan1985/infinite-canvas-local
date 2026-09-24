@@ -14,6 +14,7 @@ import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { isReversePromptConfigNode } from "@/lib/canvas/canvas-reverse-prompt";
 import { canvasSurfacePalette, canvasThemes, type CanvasBackgroundMode, type CanvasBackgroundTone } from "@/lib/canvas-theme";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -2389,6 +2390,7 @@ function InfiniteCanvasPage() {
                     { x: textNode.position.x + textNode.width + gap + configSpec.width / 2, y: centerY },
                     {
                         generationMode: "text",
+                        reversePromptConfig: true,
                         model: effectiveConfig.textModel || effectiveConfig.model || defaultConfig.textModel,
                         count: 1,
                         composerContent: t("canvas.reverseComposer", { imageId: node.id, textId: textNode.id }),
@@ -2401,7 +2403,7 @@ function InfiniteCanvasPage() {
             setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: configNode.id }, { id: nanoid(), fromNodeId: textNode.id, toNodeId: configNode.id }]);
             setSelectedNodeIds(new Set([configNode.id]));
             setSelectedConnectionId(null);
-            setDialogNodeId(configNode.id);
+            setDialogNodeId(null);
             setContextMenu(null);
         },
         [effectiveConfig.model, effectiveConfig.textModel, message, t],
@@ -4066,7 +4068,7 @@ function InfiniteCanvasPage() {
                                 runningHubPortHeads={runningHubResource ? runningHubWorkflowPortHeads(runningHubResource, connections, node.id) : undefined}
                                 runningHubWorkflowPortsOpen={Boolean(node.metadata?.runningHubWorkflowPortsOpen)}
                                 referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes) ? "disabled" : "available"}
-                                showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
+                                showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel && !isReversePromptConfigNode(node)}
                                 groupChildCount={groupChildCountById.get(node.id) || 0}
                                 isGroupDropTarget={dropTargetGroupId === node.id}
                                 batchExpanded={expandedBatchNodeIds.has(node.id)}

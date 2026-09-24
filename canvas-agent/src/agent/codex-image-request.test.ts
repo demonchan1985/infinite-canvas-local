@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCodexImageToolRequest, normalizeCodexImageModel } from "./codex-image-request.js";
+import { buildCodexImageToolRequest, normalizeCodexImageModel, selectCodexImageOrchestrator } from "./codex-image-request.js";
 
 test("Codex 图片模型只接受已支持的 GPT Image ID", () => {
     assert.equal(normalizeCodexImageModel("gpt-image-2.5-sunburst"), "gpt-image-2.5-sunburst");
@@ -14,9 +14,12 @@ test("Codex 图片请求将 2.5 选项传给 image_generation 工具", () => {
         "把参考图改成水彩插画",
         [{ name: "reference.png", type: "image/png", dataUrl: "data:image/png;base64,AAAA" }],
         { model: "gpt-image-2.5-sunburst", size: "1536x1024", quality: "max" },
+        "gpt-6-sol",
     );
 
-    assert.equal(request.model, "gpt-5.4");
+    assert.equal(request.model, "gpt-6-sol");
+    assert.equal(request.store, false);
+    assert.equal(request.stream, true);
     assert.deepEqual(request.tool_choice, { type: "image_generation" });
     assert.deepEqual(request.tools, [
         {
@@ -37,4 +40,12 @@ test("Codex 图片请求将 2.5 选项传给 image_generation 工具", () => {
             ],
         },
     ]);
+});
+
+test("Codex 图片编排模型取当前账号默认值，不固定旧模型", () => {
+    assert.equal(selectCodexImageOrchestrator([
+        { model: "gpt-5.4" },
+        { model: "gpt-6-sol", isDefault: true },
+    ]), "gpt-6-sol");
+    assert.throws(() => selectCodexImageOrchestrator([]), /没有可用模型/);
 });

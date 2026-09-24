@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 
+import { listCodexModels } from "../canvas-agent/src/agent/codex";
 import { parseChangelog } from "./src/lib/release";
 import { runningHubCoverSourceFromHtml, type RunningHubCoverKind } from "./src/lib/runninghub-cover";
 
@@ -45,7 +46,7 @@ function localPluginsManifest(): Plugin {
 
 type CodexImageAttachment = { name?: string; type?: string; dataUrl?: string };
 type CodexImageRequest = { model?: string; prompt?: string; attachments?: CodexImageAttachment[]; size?: string; quality?: string };
-type CodexTextRequest = { prompt?: string; model?: string };
+type CodexTextRequest = { prompt?: string; model?: string; attachments?: CodexImageAttachment[] };
 type RunningHubModelsRequest = { apiKey?: string };
 type RunningHubAccountStatusRequest = { apiKey?: string };
 type RunningHubTaskRequest = {
@@ -79,18 +80,13 @@ function directCodexImagegen(): Plugin {
     const install = (server: Pick<ViteDevServer, "middlewares">) => {
         server.middlewares.use("/api/codex/models", async (_req, res) => {
             try {
-                const runtimePath = resolve(webDir, "../canvas-agent/.runtime/canvas-agent.json");
-                const runtime = JSON.parse(await readFile(runtimePath, "utf8")) as { url?: string; token?: string };
-                const endpoint = String(runtime.url || "http://127.0.0.1:17376").replace(/\/$/, "");
-                const response = await fetch(`${endpoint}/agent/codex/models?token=${encodeURIComponent(String(runtime.token || ""))}`);
-                const payload = await response.json().catch(() => ({}));
-                res.statusCode = response.status;
+                const models = await listCodexModels(() => {});
                 res.setHeader("Content-Type", "application/json");
-                res.end(JSON.stringify(payload));
+                res.end(JSON.stringify({ ok: true, ...models }));
             } catch (error) {
                 res.statusCode = 503;
                 res.setHeader("Content-Type", "application/json");
-                res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "本机 Codex CLI 服务不可用" }));
+                res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "本机 Codex CLI 不可用" }));
             }
         });
         server.middlewares.use("/api/runninghub/models", async (req, res) => {
@@ -317,7 +313,7 @@ function directCodexImagegen(): Plugin {
                 const body = (await readJsonBody(req)) as CodexTextRequest;
                 const prompt = String(body.prompt || "").trim();
                 if (!prompt) throw new Error("请输入文本描述");
-                const text = await runDirectCodexText(prompt, String(body.model || "").trim());
+                const text = await runDirectCodexText(prompt, String(body.model || "").trim(), body.attachments || []);
                 res.setHeader("Content-Type", "application/json");
                 res.end(JSON.stringify({ ok: true, text }));
             } catch (error) {
@@ -613,13 +609,20 @@ async function runDirectCodexImagegen(prompt: string, attachments: CodexImageAtt
     }
 }
 
-async function runDirectCodexText(prompt: string, model: string) {
-    const instructions = ["Answer the user's request directly. Return only the requested text; do not modify project files or explain your process.", "User request:", prompt].join("\n\n");
-    const output = await runCodexCli(instructions, [], model);
-    if (output.code !== 0) throw new Error(`Codex CLI 文本生成失败：${codexCliFailure(output.stdout, output.stderr, output.code)}`);
-    const text = codexFinalText(output.stdout);
-    if (!text) throw new Error("Codex CLI 未返回文本内容");
-    return text;
+async function runDirectCodexText(prompt: string, model: string, attachments: CodexImageAttachment[] = []) {
+    const temporaryDir = attachments.length ? await mkdtemp(join(tmpdir(), "infinite-canvas-codex-text-")) : "";
+    try {
+        const references = temporaryDir ? await writeReferenceImages(temporaryDir, attachments) : [];
+        if (references.length !== attachments.length) throw new Error("参考图片不可读取，请重新选择图片后重试");
+        const instructions = ["Answer the user's request directly. Return only the requested text; do not modify project files or explain your process.", "User request:", prompt].join("\n\n");
+        const output = await runCodexCli(instructions, references, model);
+        if (output.code !== 0) throw new Error(`Codex CLI 文本生成失败：${codexCliFailure(output.stdout, output.stderr, output.code)}`);
+        const text = codexFinalText(output.stdout);
+        if (!text) throw new Error("Codex CLI 未返回文本内容");
+        return text;
+    } finally {
+        if (temporaryDir) await rm(temporaryDir, { recursive: true, force: true });
+    }
 }
 
 async function writeReferenceImages(directory: string, attachments: CodexImageAttachment[]) {

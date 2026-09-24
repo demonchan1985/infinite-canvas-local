@@ -90,6 +90,7 @@ export type RunningHubWorkflowRunOptions = {
 export type CanvasNodeMetadata = {
     content?: string;
     composerContent?: string;
+    reversePromptConfig?: boolean;
     prompt?: string;
     /** AIFISHER 非商用预设库中的节点级创作选择，随画布项目保存。 */
     creativePresets?: CanvasCreativePresetSelection;

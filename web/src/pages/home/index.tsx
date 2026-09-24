@@ -1,72 +1,206 @@
-import { ArrowRight, Clapperboard, Palette, Sparkles } from "lucide-react";
-import { type ReactNode } from "react";
-import { Button } from "antd";
+import { ArrowLeft, ArrowRight, Play } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 
-import { navigationTools } from "@/constant/navigation-tools";
+import { canvasBackgroundPalette, canvasThemes, recentCanvasBackgroundTone } from "@/lib/canvas-theme";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 
-function Highlighter({ action, color, children }: { action: "highlight" | "underline"; color: string; children?: ReactNode }) {
-    return (
-        <span className="relative inline-block px-1">
-            {action === "highlight" ? (
-                <span className="absolute inset-x-0 bottom-0 top-1 rounded-sm opacity-45" style={{ backgroundColor: color }} />
-            ) : (
-                <span className="absolute inset-x-0 bottom-0 h-1 rounded-full opacity-80" style={{ backgroundColor: color }} />
-            )}
-            <span className="relative font-medium text-stone-800 dark:text-stone-200">{children}</span>
-        </span>
-    );
-}
+import "./home.css";
+
+const sceneImages = ["style-538.webp", "style-580.webp", "style-611.webp"];
 
 export default function IndexPage() {
     const { t } = useTranslation();
     const navigate = useNavigate();
-    const [primaryTool] = navigationTools;
-    const nodeNativeTools = [
-        { icon: Palette, title: t("home.nodeNativeTools.image.title"), description: t("home.nodeNativeTools.image.description"), tools: t("home.nodeNativeTools.image.tools") },
-        { icon: Clapperboard, title: t("home.nodeNativeTools.video.title"), description: t("home.nodeNativeTools.video.description"), tools: t("home.nodeNativeTools.video.tools") },
-        { icon: Sparkles, title: t("home.nodeNativeTools.canvas.title"), description: t("home.nodeNativeTools.canvas.description"), tools: t("home.nodeNativeTools.canvas.tools") },
-    ];
+    const theme = useThemeStore((state) => state.theme);
+    const projects = useCanvasStore((state) => state.projects);
+    const tone = recentCanvasBackgroundTone(projects);
+    const palette = canvasBackgroundPalette(theme, tone);
+    const themeColors = canvasThemes[theme];
+    const [sceneIndex, setSceneIndex] = useState(0);
+    const [paused, setPaused] = useState(false);
+    const [hovered, setHovered] = useState(false);
+    const [focused, setFocused] = useState(false);
+    const [visible, setVisible] = useState(() => document.visibilityState === "visible");
+    const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    const scenes = [0, 1, 2].map((index) => ({
+        index,
+        image: `/creative-presets/${sceneImages[index]}`,
+        name: t(`home.stage.scenes.${index}.name`),
+        title: t(`home.stage.scenes.${index}.title`),
+        descriptionTitle: t(`home.stage.scenes.${index}.descriptionTitle`),
+        description: t(`home.stage.scenes.${index}.description`),
+        imageTitle: t(`home.stage.scenes.${index}.imageTitle`),
+        videoTitle: t(`home.stage.scenes.${index}.videoTitle`),
+        detail: t(`home.stage.scenes.${index}.detail`),
+        imageAlt: t(`home.stage.scenes.${index}.imageAlt`),
+    }));
+    const activeScene = scenes[sceneIndex];
+
+    useEffect(() => {
+        const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+        const onMotionChange = () => setReducedMotion(media.matches);
+        const onVisibilityChange = () => setVisible(document.visibilityState === "visible");
+        media.addEventListener("change", onMotionChange);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => {
+            media.removeEventListener("change", onMotionChange);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (paused || hovered || focused || reducedMotion || !visible) return;
+        const timer = window.setTimeout(() => setSceneIndex((index) => (index + 1) % sceneImages.length), 6500);
+        return () => window.clearTimeout(timer);
+    }, [focused, hovered, paused, reducedMotion, sceneIndex, visible]);
+
+    const colors = {
+        "--home-bg": palette.background,
+        "--home-line": palette.line,
+        "--home-swatch": palette.swatch,
+        "--home-fill": palette.fill,
+        "--home-panel": palette.panel,
+        "--home-stroke": palette.stroke,
+        "--home-text": themeColors.node.text,
+        "--home-subtext": themeColors.node.label,
+        "--home-quiet": theme === "dark" ? `color-mix(in srgb, ${themeColors.node.muted} 55%, ${themeColors.node.faint})` : themeColors.node.label,
+        "--home-highlight": tone === "neutral" ? themeColors.node.label : theme === "dark" ? palette.swatch : `color-mix(in srgb, ${palette.swatch} 60%, ${themeColors.node.text})`,
+        "--home-shadow": theme === "dark" ? "0 28px 80px rgba(0,0,0,.3)" : "0 28px 80px rgba(33,43,40,.11)",
+    } as CSSProperties;
 
     return (
-        <main className="min-h-full overflow-y-auto bg-background text-stone-950 dark:text-stone-100">
-            <section className="mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-6">
-                <div className="flex min-h-[620px] flex-col items-center justify-center py-20 text-center">
-                    <h1 className="ai-title-aurora max-w-5xl text-balance text-5xl font-semibold tracking-normal sm:text-7xl lg:text-8xl">{t("meta.title")}</h1>
-                    <p className="mt-8 max-w-3xl text-balance text-lg leading-8 text-stone-500 dark:text-stone-400">
-                        <Trans i18nKey="home.description" components={{ canvas: <Highlighter action="underline" color="#FF9800" />, content: <Highlighter action="highlight" color="#87CEFA" /> }} />
-                    </p>
-                    <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-                        <Button type="primary" size="large" onClick={() => navigate(`/${primaryTool.slug}`)} icon={<ArrowRight className="size-4" />} iconPlacement="end">
-                            {t("home.start")}
-                        </Button>
-                        <Button size="large" onClick={() => navigate("/canvas")}>
-                            {t("home.openCanvas")}
-                        </Button>
+        <main className="home-page" style={colors}>
+            <section className="home-hero">
+                <div className="home-copy">
+                    <span className="home-eyebrow">{t("home.hero.eyebrow")}</span>
+                    <h1>
+                        {t("home.hero.line1")}
+                        <br />
+                        <em>{t("home.hero.line2")}</em>
+                    </h1>
+                    <p>{t("home.hero.description")}</p>
+                    <div className="home-actions">
+                        <button className="home-primary" type="button" onClick={() => navigate("/canvas?mode=new")}>
+                            {t("home.hero.start")} <ArrowRight size={16} aria-hidden="true" />
+                        </button>
+                        <button className="home-secondary" type="button" onClick={() => navigate("/canvas")}>
+                            {t("home.hero.myCanvas")}
+                        </button>
                     </div>
+                    <span className="home-note">{t("home.hero.note")}</span>
                 </div>
 
-                <section className="mx-auto max-w-6xl border-t border-stone-200 py-16 dark:border-stone-800">
-                    <div className="mx-auto max-w-2xl text-center">
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500 dark:text-stone-400">{t("home.nodeNativeTools.eyebrow")}</div>
-                        <h2 className="mt-3 text-3xl font-semibold text-stone-950 dark:text-stone-100">{t("home.nodeNativeTools.title")}</h2>
-                        <p className="mt-3 text-base leading-7 text-stone-500 dark:text-stone-400">{t("home.nodeNativeTools.description")}</p>
+                <section
+                    className="home-workspace"
+                    role="region"
+                    aria-roledescription={t("home.stage.carousel")}
+                    aria-label={t("home.stage.label")}
+                    onMouseEnter={() => setHovered(true)}
+                    onMouseLeave={() => setHovered(false)}
+                    onFocus={() => setFocused(true)}
+                    onBlur={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+                    }}
+                    onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        setSceneIndex((index) => (index + (event.key === "ArrowRight" ? 1 : sceneImages.length - 1)) % sceneImages.length);
+                    }}
+                >
+                    <div className="home-workspace-top">
+                        <span>{activeScene.title}</span>
+                        <span>{t("home.stage.count", { current: sceneIndex + 1, total: scenes.length })}</span>
                     </div>
-                    <div className="mt-10 grid gap-4 md:grid-cols-3">
-                        {nodeNativeTools.map((item) => {
-                            const Icon = item.icon;
-                            return (
-                                <article key={item.title} className="rounded-2xl border border-stone-200 bg-card p-6 text-left shadow-sm transition duration-200 hover:-translate-y-0.5 dark:border-stone-800">
-                                    <span className="grid size-10 place-items-center rounded-xl bg-stone-100 dark:bg-stone-800"><Icon className="size-5" /></span>
-                                    <h3 className="mt-6 text-lg font-semibold">{item.title}</h3>
-                                    <p className="mt-2 text-sm leading-6 text-stone-500 dark:text-stone-400">{item.description}</p>
-                                    <p className="mt-5 text-xs font-medium tracking-wide text-stone-600 dark:text-stone-300">{item.tools}</p>
-                                </article>
-                            );
-                        })}
+                    <div className="home-board">
+                        {scenes.map((item) => (
+                            <div
+                                key={item.index}
+                                className="home-slide"
+                                role="group"
+                                aria-roledescription={t("home.stage.scene")}
+                                aria-label={t("home.stage.sceneLabel", { current: item.index + 1, total: scenes.length, name: item.name })}
+                                aria-hidden={item.index !== sceneIndex}
+                            >
+                                <svg className="home-wire" viewBox="0 0 700 468" preserveAspectRatio="none" aria-hidden="true">
+                                    <path d="M 287 168 C 365 168, 330 140, 416 140" />
+                                    <path d="M 570 288 C 638 310, 552 350, 548 365" />
+                                </svg>
+                                <div className="home-card home-text-card">
+                                    <div className="home-card-head">
+                                        <span>{item.descriptionTitle}</span>
+                                        <span>{t("home.stage.text")}</span>
+                                    </div>
+                                    <p>{item.description}</p>
+                                </div>
+                                <div className="home-card home-image-card">
+                                    <div className="home-card-head">
+                                        <span>{item.imageTitle}</span>
+                                        <span>{t("home.stage.image")}</span>
+                                    </div>
+                                    <div className="home-card-media">
+                                        <img src={item.image} alt={item.imageAlt} loading={item.index === 0 ? "eager" : "lazy"} />
+                                    </div>
+                                </div>
+                                <div className="home-card home-video-card">
+                                    <div className="home-card-head">
+                                        <span>{item.videoTitle}</span>
+                                        <span>{t("home.stage.video")}</span>
+                                    </div>
+                                    <div className="home-card-media">
+                                        <img src={item.image} alt="" loading="lazy" />
+                                        <span className="home-play-mark" aria-hidden="true">
+                                            <Play size={16} fill="currentColor" />
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="home-workspace-bottom">
+                        <div className="home-scene-caption">
+                            <strong>{activeScene.name}</strong>
+                            <span>{activeScene.detail}</span>
+                        </div>
+                        <div className="home-carousel-controls" role="group" aria-label={t("home.stage.controls")}>
+                            <button type="button" aria-label={t("home.stage.previous")} onClick={() => setSceneIndex((index) => (index + scenes.length - 1) % scenes.length)}>
+                                <ArrowLeft size={17} />
+                            </button>
+                            <div className="home-dots" role="group" aria-label={t("home.stage.select")}>
+                                {scenes.map((item) => (
+                                    <button
+                                        key={item.index}
+                                        className="home-dot"
+                                        type="button"
+                                        aria-label={t("home.stage.goTo", { current: item.index + 1, name: item.name })}
+                                        aria-current={item.index === sceneIndex}
+                                        onClick={() => setSceneIndex(item.index)}
+                                    />
+                                ))}
+                            </div>
+                            <button type="button" aria-label={t("home.stage.next")} onClick={() => setSceneIndex((index) => (index + 1) % scenes.length)}>
+                                <ArrowRight size={17} />
+                            </button>
+                            {!reducedMotion ? (
+                                <button className="home-pause" type="button" aria-label={t(paused ? "home.stage.resume" : "home.stage.pause")} onClick={() => setPaused((value) => !value)}>
+                                    {t(paused ? "home.stage.resume" : "home.stage.pause")}
+                                </button>
+                            ) : null}
+                        </div>
                     </div>
                 </section>
+            </section>
+
+            <section className="home-lower-strip" aria-label={t("home.steps.label")}>
+                {[0, 1, 2].map((index) => (
+                    <div key={index}>
+                        <span>{t(`home.steps.items.${index}.eyebrow`)}</span>
+                        <strong>{t(`home.steps.items.${index}.title`)}</strong>
+                        <p>{t(`home.steps.items.${index}.description`)}</p>
+                    </div>
+                ))}
             </section>
         </main>
     );

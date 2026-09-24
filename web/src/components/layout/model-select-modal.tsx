@@ -74,7 +74,7 @@ export function ModelSelectModal({ open, channel, selectedModels, onConfirm, onC
 
     const fetchModels = async () => {
         if (!channel) return;
-        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
+        if (channel.apiFormat !== "codex-cli" && (!channel.baseUrl.trim() || !channel.apiKey.trim())) {
             message.error(channel.apiFormat === "runninghub" ? "请先填写企业级-共享 API Key" : t("config.modelSelect.missingConfig"));
             return;
         }

@@ -3,6 +3,7 @@ import { ListPlus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { fetchChannelModels } from "@/services/api/image";
 import { CODEX_IMAGE_MODELS, defaultBaseUrlForApiFormat, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
@@ -17,6 +18,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     const [scriptTarget, setScriptTarget] = useState<ScriptTarget | null>(null);
     const [loadingCodexModels, setLoadingCodexModels] = useState(false);
     const [codexCliStatus, setCodexCliStatus] = useState("");
+    const [codexCliError, setCodexCliError] = useState(false);
     const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
         { label: "OpenAI", value: "openai" },
         { label: "Gemini", value: "gemini" },
@@ -29,6 +31,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
         if (open && channel) {
             setDraft(channel);
             setCodexCliStatus("");
+            setCodexCliError(false);
         }
     }, [open, channel]);
 
@@ -37,27 +40,23 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     const patch = (value: Partial<ModelChannel>) => setDraft((current) => (current ? { ...current, ...value } : current));
     const setModels = (models: ChannelModel[]) => patch({ models });
     const changeApiFormat = (apiFormat: ApiCallFormat) => {
-        const baseUrl = !draft.baseUrl.trim() || draft.baseUrl.trim() === defaultBaseUrlForApiFormat(draft.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : draft.baseUrl;
+        const baseUrl = apiFormat === "codex-cli" || !draft.baseUrl.trim() || draft.baseUrl.trim() === defaultBaseUrlForApiFormat(draft.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : draft.baseUrl;
         patch({ apiFormat, baseUrl, ...(apiFormat === "codex-cli" ? { apiKey: "" } : {}) });
     };
-    const loadCodexModels = async () => {
+    const checkCodexCli = async (loadModels: boolean) => {
         setLoadingCodexModels(true);
         setCodexCliStatus("");
+        setCodexCliError(false);
         try {
-            const response = await fetch("/api/codex/models");
-            const payload = (await response.json().catch(() => ({}))) as { data?: Array<{ model?: string; displayName?: string }>; error?: string };
-            if (!response.ok) throw new Error(payload.error || "无法连接本机 Codex CLI");
-            const names = (payload.data || []).map((item) => (item.model || item.displayName || "").trim()).filter(Boolean);
-            if (!names.length) throw new Error("Codex CLI 未返回可用模型");
-            const codexImageModels = new Set<string>(CODEX_IMAGE_MODELS);
-            const models = [
-                ...names.filter((name) => !codexImageModels.has(name)).map((name) => ({ name, capability: "text" as const })),
-                ...CODEX_IMAGE_MODELS.map((name) => ({ name, capability: "image" as const })),
-            ];
-            setModels(models);
-            setCodexCliStatus(`已读取 ${models.length} 个模型`);
+            const names = await fetchChannelModels(draft);
+            if (loadModels) {
+                const imageModels = new Set<string>(CODEX_IMAGE_MODELS);
+                setModels(names.map((name) => ({ name, capability: imageModels.has(name) ? "image" : "text" })));
+            }
+            setCodexCliStatus(loadModels ? `连接正常，已读取 ${names.length} 个模型` : `连接正常，可读取 ${names.length} 个模型`);
         } catch (error) {
             setCodexCliStatus(error instanceof Error ? error.message : "本机 Codex CLI 连接失败");
+            setCodexCliError(true);
         } finally {
             setLoadingCodexModels(false);
         }
@@ -96,18 +95,19 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                     <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} onChange={changeApiFormat} />
                 </label>
                 <label className="block md:col-span-2">
-                    <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.baseUrl")}</span>
-                    <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
+                    <span className="mb-1 block text-sm font-medium">{draft.apiFormat === "codex-cli" ? "本地画布服务地址" : t("config.channelEditor.baseUrl")}</span>
+                    <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" disabled={draft.apiFormat === "codex-cli"} />
                 </label>
                 {draft.apiFormat === "codex-cli" ? (
                     <div className="rounded-lg border border-dashed border-stone-300 px-3 py-3 text-sm text-stone-600 dark:border-stone-700 dark:text-stone-300 md:col-span-2">
                         <div className="font-medium">连接本机 Codex CLI</div>
-                        <div className="mt-1 text-xs text-stone-500">无需 API Key。</div>
+                        <div className="mt-1 text-xs text-stone-500">无需 API Key。需保持“启动独立画布”窗口运行。</div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
-                            <Button icon={<RefreshCw className="size-4" />} loading={loadingCodexModels} onClick={() => void loadCodexModels()}>
+                            <Button loading={loadingCodexModels} onClick={() => void checkCodexCli(false)}>验证连接</Button>
+                            <Button icon={<RefreshCw className="size-4" />} loading={loadingCodexModels} onClick={() => void checkCodexCli(true)}>
                                 拉取模型
                             </Button>
-                            {codexCliStatus ? <span className="text-xs text-stone-500">{codexCliStatus}</span> : null}
+                            {codexCliStatus ? <span className={`text-xs ${codexCliError ? "text-red-500" : "text-green-600 dark:text-green-400"}`}>{codexCliStatus}</span> : null}
                         </div>
                     </div>
                 ) : draft.apiFormat === "runninghub" ? (

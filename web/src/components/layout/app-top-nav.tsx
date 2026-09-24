@@ -11,6 +11,9 @@ import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { cn } from "@/lib/utils";
 import { useEffect, useRef, useState } from "react";
 import { useAgentStore } from "@/stores/use-agent-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { useThemeStore } from "@/stores/use-theme-store";
+import { canvasBackgroundPalette, recentCanvasBackgroundTone } from "@/lib/canvas-theme";
 
 export function AppTopNav() {
     const { t } = useTranslation();
@@ -24,6 +27,10 @@ export function AppTopNav() {
     const togglePanel = useAgentStore((state) => state.togglePanel);
     const panelOpen = useAgentStore((state) => state.panelOpen);
     const hideHeader = /^\/canvas\/[^/]+/.test(pathname);
+    const isHome = pathname === "/";
+    const theme = useThemeStore((state) => state.theme);
+    const projects = useCanvasStore((state) => state.projects);
+    const homePalette = isHome ? canvasBackgroundPalette(theme, recentCanvasBackgroundTone(projects)) : null;
     const slug = pathname.split("/").filter(Boolean)[0];
     const activeToolSlug = navigationTools.some((tool) => tool.slug === slug) ? (slug as NavigationToolSlug) : undefined;
 
@@ -36,18 +43,23 @@ export function AppTopNav() {
     return (
         <>
             {!hideHeader ? (
-                <header className="sticky top-0 z-20 h-14 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800">
-                    <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-5 px-6">
+                <header
+                    className={cn("sticky top-0 z-20 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800", isHome ? "h-[68px] sm:h-[78px]" : "h-14")}
+                    style={homePalette ? { backgroundColor: homePalette.background, borderColor: homePalette.stroke } : undefined}
+                >
+                    <div className={cn("mx-auto flex h-full items-stretch justify-between gap-5", isHome ? "max-w-[1580px] px-[18px] sm:px-9" : "max-w-7xl px-6")}>
                         <div className="flex min-w-0 items-center">
                             <Link to="/" className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
-                                <span
-                                    className="size-7 shrink-0 bg-current"
-                                    style={{
-                                        mask: "url(/logo.svg) center / contain no-repeat",
-                                        WebkitMask: "url(/logo.svg) center / contain no-repeat",
-                                    }}
-                                />
-                                <span className="text-base font-medium">{t("meta.title")}</span>
+                                {!isHome ? (
+                                    <span
+                                        className="size-7 shrink-0 bg-current"
+                                        style={{
+                                            mask: "url(/logo.svg) center / contain no-repeat",
+                                            WebkitMask: "url(/logo.svg) center / contain no-repeat",
+                                        }}
+                                    />
+                                ) : null}
+                                <span className={isHome ? "text-xl font-bold" : "text-base font-medium"}>{t("meta.title")}</span>
                             </Link>
 
                             <button

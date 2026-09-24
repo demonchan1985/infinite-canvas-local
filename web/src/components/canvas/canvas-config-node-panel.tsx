@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { ModelPicker } from "@/components/model-picker";
 import { defaultConfig, findChannelModel, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes, type CanvasBackgroundTone } from "@/lib/canvas-theme";
+import { isReversePromptConfigNode } from "@/lib/canvas/canvas-reverse-prompt";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
@@ -126,10 +127,12 @@ export function CanvasConfigNodePanel({ node, backgroundTone, isRunning, inputSu
                 <InputChip label={t("canvas.configNode.references")} value={isRunningHubWorkflow ? `${inputSummary.imageCount}/${workflowPreview?.imageSlots || 0}` : t("canvas.configNode.images", { count: inputSummary.imageCount })} style={chipStyle} />
                 <InputChip label={t("canvas.configNode.videoReferences")} value={isRunningHubWorkflow ? `${inputSummary.videoCount}/${workflowPreview?.videoSlots || 0}` : t("canvas.configNode.items", { count: inputSummary.videoCount })} style={chipStyle} />
                 <InputChip label={t("canvas.configNode.audioReferences")} value={isRunningHubWorkflow ? `${inputSummary.audioCount}/${workflowPreview?.audioSlots || 0}` : t("canvas.configNode.items", { count: inputSummary.audioCount })} style={chipStyle} />
-                <button type="button" className="inline-flex h-10 cursor-pointer items-center gap-1.5 rounded-md border px-3 text-xl" style={chipStyle} onMouseDown={(event) => event.stopPropagation()} onClick={onComposerToggle}>
-                    <Settings2 className="size-4" />
-                    {t("canvas.configNode.compose")}
-                </button>
+                {!isReversePromptConfigNode(node) ? (
+                    <button type="button" className="inline-flex h-10 cursor-pointer items-center gap-1.5 rounded-md border px-3 text-xl" style={chipStyle} onMouseDown={(event) => event.stopPropagation()} onClick={onComposerToggle}>
+                        <Settings2 className="size-4" />
+                        {t("canvas.configNode.compose")}
+                    </button>
+                ) : null}
             </div>
 
             <div className="mb-4 grid min-w-0 cursor-default grid-cols-[minmax(0,1fr)_180px] items-center gap-2" onMouseDown={(event) => event.stopPropagation()}>

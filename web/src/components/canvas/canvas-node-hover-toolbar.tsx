@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
+import { isReversePromptConfigNode } from "@/lib/canvas/canvas-reverse-prompt";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { readTextNodeImportFile, TEXT_NODE_IMPORT_ACCEPT } from "@/lib/canvas/canvas-text-node-import";
@@ -230,7 +231,7 @@ export function CanvasNodeHoverToolbar({
     ];
     const nodeToolbarTools: ToolbarTool[] = [
         ...(canRetry ? [{ id: "retry", title: t("canvas.nodeToolbar.retryTitle"), label: t("canvas.node.retry"), icon: <RefreshCw className="size-4" />, onClick: () => onRetry(node) }] : []),
-        ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: t("common.addToAssets"), label: t("canvas.nodeToolbar.saveAsset"), icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
+        ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: t(isImage ? "canvas.nodeToolbar.addImageToAssets" : "common.addToAssets"), label: t(isImage ? "canvas.nodeToolbar.addImageToAssets" : "canvas.nodeToolbar.saveAsset"), icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
         ...(isText
             ? [
                   {
@@ -258,7 +259,7 @@ export function CanvasNodeHoverToolbar({
         ...(isVideo ? [{ id: "edit", title: t("common.edit"), label: t("common.edit"), icon: <MessageSquare className="size-4" />, onClick: () => onToggleDialog(node) }] : []),
         ...(isText ? [{ id: "analyzeVideo", title: t("canvas.nodeToolbar.analyzeVideoTitle"), label: t("canvas.nodeToolbar.analyzeVideo"), icon: <Sparkles className="size-4" />, onClick: () => onAnalyzeVideo(node) }] : []),
         ...(isText ? [{ id: "generateImage", title: t("canvas.node.generateImage"), label: t("canvas.node.generate"), icon: <ImageIcon className="size-4" />, onClick: () => onGenerateImage(node) }] : []),
-        ...(isConfig ? [{ id: "config", title: t("canvas.configNode.title"), label: t("canvas.configNode.title"), icon: <Settings2 className="size-4" />, onClick: () => onToggleDialog(node) }] : []),
+        ...(isConfig && !isReversePromptConfigNode(node) ? [{ id: "config", title: t("canvas.configNode.title"), label: t("canvas.configNode.title"), icon: <Settings2 className="size-4" />, onClick: () => onToggleDialog(node) }] : []),
         ...(isText ? [{ id: "decreaseFont", title: t("canvas.nodeToolbar.decreaseFont"), label: t("canvas.nodeToolbar.zoomOut"), icon: <Minus className="size-4" />, onClick: () => onDecreaseFont(node) }] : []),
         ...(isText ? [{ id: "increaseFont", title: t("canvas.nodeToolbar.increaseFont"), label: t("canvas.nodeToolbar.zoomIn"), icon: <Plus className="size-4" />, onClick: () => onIncreaseFont(node) }] : []),
         ...(isImage && !hasImage ? [{ id: "uploadImage", title: t("canvas.nodeToolbar.uploadImage"), label: t("canvas.nodeToolbar.uploadImage"), icon: <Upload className="size-4" />, onClick: () => onUpload(node) }] : []),
@@ -291,14 +292,14 @@ export function CanvasNodeHoverToolbar({
         return !["config", "decreaseFont", "increaseFont"].includes(tool.id);
     });
     const imageToolbarTools = [...baseToolbarTools, ...modeFilteredNodeTools];
-    // 简洁模式只保留下载和更多；专业模式以固定顺序完整展示图片工具。
-    const imagePrimaryToolIds = isSimpleMode ? new Set(["download"]) : new Set(["maskEdit", "personAdjust", "angle"]);
+    // 简洁模式保留下载、存资产和更多；专业模式以固定顺序完整展示图片工具。
+    const imagePrimaryToolIds = isSimpleMode ? new Set(["download", "saveAsset"]) : new Set(["maskEdit", "personAdjust", "angle"]);
     const imagePrimaryTools = imageToolbarTools.filter((tool) => imagePrimaryToolIds.has(tool.id));
     const imageToolbarToolById = new Map(imageToolbarTools.map((tool) => [tool.id, tool]));
     const professionalImageToolbarTools = professionalImageToolbarOrder.map((id) => imageToolbarToolById.get(id)).filter((tool): tool is ToolbarTool => Boolean(tool));
     const toolbarTools = hasImage ? (isSimpleMode ? imagePrimaryTools : professionalImageToolbarTools) : [...baseToolbarTools, ...modeFilteredNodeTools, ...(isSimpleMode ? [] : extraTools)];
     const moreImageTools = isSimpleMode ? imageToolbarTools.filter((tool) => !imagePrimaryToolIds.has(tool.id) && quickImageToolIdSet.has(tool.id as ImageQuickToolId)) : [];
-    const selectableImageToolbarTools = imageToolbarTools.filter((tool) => tool.id !== "retry") as ImageToolbarSettingsTool[];
+    const selectableImageToolbarTools = imageToolbarTools.filter((tool) => tool.id !== "retry" && tool.id !== "saveAsset") as ImageToolbarSettingsTool[];
 
     const closeImageToolSettings = () => {
         setImageToolSettingsOpen(false);
@@ -423,7 +424,7 @@ export function CanvasNodeHoverToolbar({
                                 </span>
                             </Popover>
                         ) : (
-                            <ToolbarAction {...tool} showLabel={isImage ? isSimpleMode && showImageToolLabels : true} />
+                            <ToolbarAction {...tool} showLabel={hasImage && tool.id === "saveAsset" ? false : isImage ? isSimpleMode && showImageToolLabels : true} />
                         )}
                     </Fragment>
                 ))}

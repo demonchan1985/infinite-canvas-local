@@ -7,7 +7,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 
 import { runClaudeTurn } from "../agent/claude.js";
 import { archiveCodexThread, CodexSkillLookupError, configureCodexSkill, generateCodexSkillDraft, interruptCodexTurn, isRecoverableThreadError, listCodexModels, listCodexSkills, listCodexThreads, readCodexThread, resolveCodexApproval, resolveCodexSkill, resumeCodexThread, runCodexTurn, startCodexThread, summarizeCodexThread } from "../agent/codex.js";
-import { buildCodexImageToolRequest, isCodexImage25Model, normalizeCodexImageModel, type CodexImageModel } from "../agent/codex-image-request.js";
+import { buildCodexImageToolRequest, isCodexImage25Model, normalizeCodexImageModel, selectCodexImageOrchestrator, type CodexImageModel } from "../agent/codex-image-request.js";
 import type { CodexReasoningEffort, CodexSkillSelector } from "../agent/codex-protocol.js";
 import { messageMetadataStore } from "../agent/message-metadata.js";
 import type { AgentAttachment, AgentPermissionMode } from "../agent/types.js";
@@ -432,7 +432,8 @@ export function startHttpServer() {
         const model = normalizeCodexImageModel(req.body?.model);
         const size = validCanvasImageSize(req.body?.size);
         const quality = validCanvasImageQuality(req.body?.quality, model);
-        const images = await runLocalCodexCliImagegen(prompt, attachments, workspace.workspacePath, { model, size, quality });
+        const orchestratorModel = isCodexImage25Model(model) ? selectCodexImageOrchestrator((await listCodexModels(emit)).data) : undefined;
+        const images = await runLocalCodexCliImagegen(prompt, attachments, workspace.workspacePath, { model, size, quality, orchestratorModel });
         res.json({ ok: true, images });
     }));
 
@@ -582,7 +583,7 @@ function withAttachmentContext(prompt: string, attachments: Array<{ id: string; 
 }
 
 /** 独立调用具备原生尺寸参数的 Codex 图片 CLI，不占用或关联画布聊天 Agent 的线程。 */
-async function runLocalCodexCliImagegen(prompt: string, attachments: AgentAttachment[], cwd: string, imageOptions: { model: CodexImageModel; size?: string; quality?: string }) {
+async function runLocalCodexCliImagegen(prompt: string, attachments: AgentAttachment[], cwd: string, imageOptions: { model: CodexImageModel; size?: string; quality?: string; orchestratorModel?: string }) {
     const temporaryDir = await mkdtemp(path.join(os.tmpdir(), "canvas-codex-imagegen-"));
     try {
         const outputPath = path.join(temporaryDir, "generated.png");
@@ -617,8 +618,9 @@ async function writeCliReferenceImages(dir: string, attachments: AgentAttachment
     }));
 }
 
-async function runCodexImage25Skill(requestPath: string, outputPath: string, prompt: string, attachments: AgentAttachment[], imageOptions: { model: CodexImageModel; size?: string; quality?: string }, cwd: string) {
-    await writeFile(requestPath, JSON.stringify(buildCodexImageToolRequest(prompt, attachments, imageOptions)));
+async function runCodexImage25Skill(requestPath: string, outputPath: string, prompt: string, attachments: AgentAttachment[], imageOptions: { model: CodexImageModel; size?: string; quality?: string; orchestratorModel?: string }, cwd: string) {
+    if (!imageOptions.orchestratorModel) throw new Error("本机 Codex 账户没有可用模型，无法发起图片请求");
+    await writeFile(requestPath, JSON.stringify(buildCodexImageToolRequest(prompt, attachments, imageOptions, imageOptions.orchestratorModel)));
     return runCodexImageCommand(["--json", "--provider", "codex", "request", "create", "--request-operation", "responses", "--body-file", requestPath, "--out-image", outputPath, "--expect-image"], cwd);
 }
 

@@ -1,4 +1,5 @@
 import type { AgentAttachment } from "./types.js";
+import type { CodexModel } from "./codex-protocol.js";
 
 export const CODEX_IMAGE_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "gpt-image-2"] as const;
 export type CodexImageModel = (typeof CODEX_IMAGE_MODELS)[number];
@@ -12,14 +13,16 @@ type CodexImageToolOptions = {
 type CodexImageInput = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
 
 /** 用 Codex 订阅认证调用 Responses 图片工具；实际图片模型必须位于工具字段，而不是顶层编排模型字段。 */
-export function buildCodexImageToolRequest(prompt: string, attachments: AgentAttachment[], options: CodexImageToolOptions) {
+export function buildCodexImageToolRequest(prompt: string, attachments: AgentAttachment[], options: CodexImageToolOptions, orchestratorModel: string) {
     const content: CodexImageInput[] = [{ type: "input_text", text: prompt }];
     for (const attachment of attachments) {
         if (attachment.dataUrl?.startsWith("data:image/")) content.push({ type: "input_image", image_url: attachment.dataUrl });
     }
     return {
         // 顶层模型只负责编排；实际图片模型见 tools[0].model。
-        model: "gpt-5.4",
+        model: orchestratorModel,
+        store: false,
+        stream: true,
         input: [{ role: "user" as const, content }],
         tools: [
             {
@@ -33,6 +36,12 @@ export function buildCodexImageToolRequest(prompt: string, attachments: AgentAtt
         ],
         tool_choice: { type: "image_generation" as const },
     };
+}
+
+export function selectCodexImageOrchestrator(models: Pick<CodexModel, "model" | "isDefault">[]) {
+    const model = models.find((item) => item.isDefault)?.model || models[0]?.model;
+    if (!model) throw new Error("本机 Codex 账户没有可用模型，无法发起图片请求");
+    return model;
 }
 
 export function isCodexImage25Model(model: CodexImageModel) {

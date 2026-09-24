@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@openai/codex": "0.146.0",
+    "@openai/codex": "0.156.1",
     "express": "^5.1.0",
     "gpt-image-2-skill": "0.7.4",
     "gray-matter": "^4.0.3",

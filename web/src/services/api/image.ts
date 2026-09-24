@@ -415,6 +415,12 @@ async function requestNativeCodexImages(prompt: string, references: ReferenceIma
 type NativeCodexTextResponse = { ok?: boolean; text?: string; error?: string };
 
 async function requestNativeCodexText(model: string, messages: ResponseInputMessage[], options?: RequestOptions) {
+    const attachments = messages.flatMap((message) => {
+        if ("type" in message || message.role === "tool" || typeof message.content === "string") return [];
+        return message.content
+            .filter((item) => item.type === "image_url")
+            .map((item) => ({ dataUrl: item.image_url.url }));
+    });
     const prompt = messages
         .map((message) => {
             if ("type" in message) return `function call ${message.name}:\n${message.arguments}`;
@@ -434,7 +440,7 @@ async function requestNativeCodexText(model: string, messages: ResponseInputMess
         const response = await fetch("/api/codex/text", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model, prompt }),
+            body: JSON.stringify({ model, prompt, attachments }),
             signal: options?.signal,
         });
         const payload = (await response.json().catch(() => ({}))) as NativeCodexTextResponse;
@@ -1012,6 +1018,20 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
 }
 
 export async function fetchChannelModels(channel: ModelChannel) {
+    if (channel.apiFormat === "codex-cli") {
+        let response: Response;
+        try {
+            response = await fetch("/api/codex/models");
+        } catch {
+            throw new Error("无法连接本地画布服务。请运行“启动独立画布”并保持窗口开启，然后刷新页面重试。");
+        }
+        const payload = (await response.json().catch(() => ({}))) as { data?: Array<{ model?: string; displayName?: string }>; error?: string };
+        if (response.status === 503) throw new Error(`本机 Codex CLI 连接失败：${payload.error || "请确认 Codex 已登录，然后重试"}`);
+        if (!response.ok) throw new Error(payload.error || "无法连接本机 Codex CLI");
+        const names = (payload.data || []).map((item) => (item.model || item.displayName || "").trim()).filter(Boolean);
+        if (!names.length) throw new Error("Codex CLI 未返回可用模型");
+        return [...new Set([...names, ...CODEX_IMAGE_MODELS])];
+    }
     if (channel.apiFormat === "runninghub") {
         try {
             const response = await fetch("/api/runninghub/models", {
