@@ -2,7 +2,7 @@ import { RefreshCw } from "lucide-react";
 import { Tooltip } from "antd";
 import { useEffect, useState } from "react";
 
-import { fetchRunningHubAccountStatus, runningHubAccountKey, type RunningHubAccountStatus } from "@/services/runninghub-account";
+import { fetchRunningHubAccountStatus, runningHubAccountBaseUrl, runningHubAccountKey, type RunningHubAccountStatus } from "@/services/runninghub-account";
 import { useConfigStore } from "@/stores/use-config-store";
 
 const REFRESH_INTERVAL_MS = 60_000;
@@ -16,7 +16,9 @@ function walletLabel(value: number) {
 }
 
 export function RunningHubAccountBalance() {
-    const apiKey = useConfigStore((state) => runningHubAccountKey(state.config.channels));
+    const channels = useConfigStore((state) => state.config.channels);
+    const apiKey = runningHubAccountKey(channels);
+    const baseUrl = runningHubAccountBaseUrl(channels);
     const [account, setAccount] = useState<RunningHubAccountStatus | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -25,7 +27,7 @@ export function RunningHubAccountBalance() {
         if (!apiKey) return;
         setLoading(true);
         try {
-            setAccount(await fetchRunningHubAccountStatus(apiKey));
+            setAccount(await fetchRunningHubAccountStatus(apiKey, baseUrl));
             setError("");
         } catch (reason) {
             setError(reason instanceof Error ? reason.message : "RunningHub 账户状态读取失败");
@@ -43,9 +45,9 @@ export function RunningHubAccountBalance() {
         void refresh();
         const timer = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
         return () => window.clearInterval(timer);
-        // refresh 仅依赖 apiKey，避免刷新状态变化重新创建定时器。
+        // refresh 仅依赖当前 Key 和站点，避免刷新状态变化重新创建定时器。
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [apiKey]);
+    }, [apiKey, baseUrl]);
 
     if (!apiKey) return null;
     const title = error || (account ? `RH币余额：${coinsLabel(account.coins)}\n钱包余额：${walletLabel(account.wallet)} ${account.currency}\n运行任务：${account.runningTasks}` : "正在读取 RunningHub 账户余额");

@@ -131,6 +131,53 @@ export function startHttpServer() {
         if (validToken(req, requestUrl(req, config), config.token)) return next();
         res.status(401).json({ ok: false, error: "invalid token" });
     });
+    const localRoot = process.env.CANVAS_LOCAL_LAUNCHER_ROOT || "";
+    const updateScript = localRoot ? path.join(localRoot, "scripts/update-local.mjs") : "";
+    let localUpdateStarting = false;
+    const checkLocalUpdate = async () => {
+        if (!updateScript) return { ok: false, error: "请通过 Git 克隆目录中的独立启动器运行画布，才能一键更新。" };
+        return new Promise<{ ok: boolean; error: string }>((resolve, reject) => {
+            const child = spawn(process.execPath, [updateScript, "--check"], { cwd: localRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+            let output = "";
+            child.stdout.on("data", (data: Buffer) => { output += data.toString(); });
+            child.once("error", reject);
+            child.once("close", (code) => {
+                if (code !== 0) return reject(new Error("无法检查本地 Git 克隆；请确认已安装 Git。"));
+                try { resolve(JSON.parse(output)); }
+                catch { reject(new Error("本地更新器没有返回有效的检查结果。")); }
+            });
+        });
+    };
+    app.get("/agent/local-update/check", route(async (_req, res) => {
+        res.setHeader("Cache-Control", "no-store");
+        res.json(await checkLocalUpdate());
+    }));
+    app.get("/agent/local-update/status", route(async (_req, res) => {
+        res.setHeader("Cache-Control", "no-store");
+        const file = path.join(localRoot || path.resolve(process.cwd(), ".."), "canvas-agent/.runtime/local-update.json");
+        res.json(JSON.parse(await readFile(file, "utf8").catch(() => '{"phase":"idle","error":""}')));
+    }));
+    app.post("/agent/local-update", route(async (_req, res) => {
+        if (localUpdateStarting) return void res.status(409).json({ ok: false, error: "更新已经开始，请等待画布重启。" });
+        const check = await checkLocalUpdate();
+        if (!check.ok) return void res.status(409).json(check);
+        localUpdateStarting = true;
+        try {
+            await writeFile(path.join(localRoot, "canvas-agent/.runtime/local-update.json"), JSON.stringify({ phase: "stopping", error: "", updatedAt: Date.now() }));
+            const child = await new Promise<ReturnType<typeof spawn>>((resolve, reject) => {
+                const updater = spawn(process.execPath, [updateScript, "--apply"], { cwd: localRoot, detached: true, stdio: "ignore", windowsHide: true });
+                updater.once("spawn", () => resolve(updater));
+                updater.once("error", reject);
+            });
+            child.unref();
+            res.once("finish", () => setTimeout(() => process.exit(0), 150));
+            res.json({ ok: true });
+        } catch (error) {
+            localUpdateStarting = false;
+            await writeFile(path.join(localRoot, "canvas-agent/.runtime/local-update.json"), JSON.stringify({ phase: "failed", error: "本地更新器启动失败，请检查 Node.js 与文件权限。", updatedAt: Date.now() }));
+            throw error;
+        }
+    }));
     app.get("/events", (req, res) => {
         session.openEvents(requestUrl(req, config), res, ensureSiteWorkspace(config).activeThreadId || "");
     });

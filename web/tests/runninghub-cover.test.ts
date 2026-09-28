@@ -4,8 +4,8 @@ import test from "node:test";
 import { RUNNINGHUB_COVER_VERSION, runningHubCoverSourceFromHtml, runningHubCoverUrl } from "../src/lib/runninghub-cover.ts";
 
 test("RunningHub AI 应用和云端工作流使用各自的本地封面缓存地址", () => {
-    assert.equal(runningHubCoverUrl("app", "1975951975441412098"), `/api/runninghub/cover?kind=app&id=1975951975441412098&v=${RUNNINGHUB_COVER_VERSION}`);
-    assert.equal(runningHubCoverUrl("workflow", "2092878871120142337"), `/api/runninghub/cover?kind=workflow&id=2092878871120142337&v=${RUNNINGHUB_COVER_VERSION}`);
+    assert.equal(runningHubCoverUrl("app", "1975951975441412098"), `/api/runninghub/cover?kind=app&id=1975951975441412098&site=cn&v=${RUNNINGHUB_COVER_VERSION}`);
+    assert.equal(runningHubCoverUrl("workflow", "2092878871120142337", "https://www.runninghub.ai"), `/api/runninghub/cover?kind=workflow&id=2092878871120142337&site=ai&v=${RUNNINGHUB_COVER_VERSION}`);
 });
 
 test("无效资源不生成封面请求地址", () => {

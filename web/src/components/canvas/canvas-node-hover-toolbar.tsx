@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { App, Button, Modal, Popover, Segmented, Tooltip } from "antd";
-import { ChevronDown, Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, LoaderCircle, MessageSquare, Minus, Music2, Plus, RefreshCw, Settings2, SlidersHorizontal, Smile, Sparkles, Trash2, Upload, Video } from "lucide-react";
+import { ChevronDown, Copy, Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, LoaderCircle, MessageSquare, Minus, Music2, Plus, RefreshCw, Settings2, SlidersHorizontal, Smile, Sparkles, Trash2, Upload, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { canvasNodeReadableScale } from "@/lib/canvas/canvas-node-size";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { isReversePromptConfigNode } from "@/lib/canvas/canvas-reverse-prompt";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
@@ -46,7 +47,6 @@ type CanvasNodeHoverToolbarProps = {
     onViewImage: (node: CanvasNodeData) => void;
     onReversePrompt: (node: CanvasNodeData) => void;
     onRetry: (node: CanvasNodeData) => void;
-    onToggleFreeResize: (node: CanvasNodeData) => void;
     onDelete: (node: CanvasNodeData) => void;
     viewMode: CanvasViewMode;
     extraTools?: CanvasNodeToolbarItem[];
@@ -76,7 +76,6 @@ const professionalImageToolbarOrder = [
     "upscale",
     "copyPrompt",
     "reversePrompt",
-    "resize",
     "view",
     "download",
     "saveAsset",
@@ -121,7 +120,6 @@ export function CanvasNodeHoverToolbar({
     onViewImage,
     onReversePrompt,
     onRetry,
-    onToggleFreeResize,
     onDelete,
     viewMode,
     extraTools = [],
@@ -168,8 +166,9 @@ export function CanvasNodeHoverToolbar({
 
     const activeNode = node;
     const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
-    // 留出节点标题、类型图标和分辨率信息的独立区域，操作条不压住信息。
-    const top = viewport.y + node.position.y * viewport.k - 32;
+    // 图片信息行底边距图片 2 屏幕像素；按编辑框 24px 高度为工具条保留空间。
+    const infoTopOffset = node.type === CanvasNodeType.Image ? 2 + 24 * canvasNodeReadableScale(viewport.k) * viewport.k + 6 : 32;
+    const top = viewport.y + node.position.y * viewport.k - infoTopOffset;
     const isImage = node.type === CanvasNodeType.Image;
     const isVideo = node.type === CanvasNodeType.Video;
     const isAudio = node.type === CanvasNodeType.Audio;
@@ -177,8 +176,10 @@ export function CanvasNodeHoverToolbar({
     const hasVideo = isVideo && Boolean(node.metadata?.content);
     const hasAudio = isAudio && Boolean(node.metadata?.content);
     const isText = node.type === CanvasNodeType.Text;
+    const textContent = isText ? primaryTextContent(node) : "";
     const isConfig = node.type === CanvasNodeType.Config;
     const isSimpleMode = viewMode === "simple";
+    const showToolbarLabels = hasImage && isSimpleMode && showImageToolLabels;
     const canRetry = node.metadata?.status === "error";
     const quickImageToolIdSet = new Set(quickImageToolIds);
     const copyImagePrompt = (target: CanvasNodeData) => {
@@ -189,7 +190,7 @@ export function CanvasNodeHoverToolbar({
         }
         copyText(prompt, t("common.promptCopied"));
     };
-    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onPersonAdjust, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt });
+    const imageTools = buildImageToolbarTools(node, { onUpload, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onPersonAdjust, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt });
 
     const startTextImport = () => {
         onKeep(activeNode.id);
@@ -232,6 +233,7 @@ export function CanvasNodeHoverToolbar({
     const nodeToolbarTools: ToolbarTool[] = [
         ...(canRetry ? [{ id: "retry", title: t("canvas.nodeToolbar.retryTitle"), label: t("canvas.node.retry"), icon: <RefreshCw className="size-4" />, onClick: () => onRetry(node) }] : []),
         ...(hasImage || hasVideo || isText ? [{ id: "saveAsset", title: t(isImage ? "canvas.nodeToolbar.addImageToAssets" : "common.addToAssets"), label: t(isImage ? "canvas.nodeToolbar.addImageToAssets" : "canvas.nodeToolbar.saveAsset"), icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
+        ...(isText && textContent ? [{ id: "copyText", title: t("assets.copyText"), label: t("assets.copyText"), icon: <Copy className="size-4" />, onClick: () => copyText(textContent) }] : []),
         ...(isText
             ? [
                   {
@@ -391,7 +393,7 @@ export function CanvasNodeHoverToolbar({
                                         onClick={() => undefined}
                                         active={personAdjustOpen}
                                         suffix={<ChevronDown className="size-3.5 opacity-65" />}
-                                        showLabel={isImage ? isSimpleMode && showImageToolLabels : true}
+                                        showLabel={showToolbarLabels}
                                     />
                                 </span>
                             </Popover>
@@ -420,11 +422,11 @@ export function CanvasNodeHoverToolbar({
                                 overlayInnerStyle={{ padding: 0, background: theme.toolbar.panel, border: `1px solid ${theme.toolbar.border}`, boxShadow: "0 18px 48px rgba(0,0,0,.28)" }}
                             >
                                 <span>
-                                    <ToolbarAction {...tool} onClick={() => undefined} active={superResolveOpen} showLabel={isImage ? isSimpleMode && showImageToolLabels : true} />
+                                    <ToolbarAction {...tool} onClick={() => undefined} active={superResolveOpen} showLabel={showToolbarLabels} />
                                 </span>
                             </Popover>
                         ) : (
-                            <ToolbarAction {...tool} showLabel={hasImage && tool.id === "saveAsset" ? false : isImage ? isSimpleMode && showImageToolLabels : true} />
+                            <ToolbarAction {...tool} showLabel={hasImage && tool.id === "saveAsset" ? false : showToolbarLabels} />
                         )}
                     </Fragment>
                 ))}

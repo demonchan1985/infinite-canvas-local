@@ -2,7 +2,7 @@ import { Link2Off } from "lucide-react";
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { RUNNING_HUB_WORKFLOW_PORT_X, runningHubWorkflowContentScale, runningHubWorkflowPortLabel, runningHubWorkflowPortY } from "@/components/canvas/canvas-runninghub-workflow-ports";
+import { runningHubWorkflowContentScale, runningHubWorkflowPortLabel, runningHubWorkflowPortX, runningHubWorkflowPortY, type RunningHubWorkflowPortHead } from "@/components/canvas/canvas-runninghub-workflow-ports";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { RunningHubResource } from "@/stores/use-config-store";
 import type { CanvasConnection, CanvasNodeData, ConnectionHandle, Position } from "@/types/canvas";
@@ -15,6 +15,7 @@ export function ConnectionPath({
     flowing,
     workflowPortsOpen = false,
     workflowResource,
+    workflowPortHeads,
     scale,
     onSelect,
     onDisconnect,
@@ -27,6 +28,7 @@ export function ConnectionPath({
     flowing: boolean;
     workflowPortsOpen?: boolean;
     workflowResource?: RunningHubResource;
+    workflowPortHeads?: RunningHubWorkflowPortHead[];
     scale: number;
     onSelect: () => void;
     onDisconnect?: () => void;
@@ -38,8 +40,8 @@ export function ConnectionPath({
     const startX = from.position.x + from.width;
     const startY = from.position.y + from.height / 2;
     const workflowScale = workflowResource ? runningHubWorkflowContentScale(to) : 1;
-    const workflowPortY = runningHubWorkflowPortY(connection.toPort, workflowPortsOpen || Boolean(to.metadata?.runningHubWorkflowPortsOpen), workflowResource);
-    const endX = workflowPortY === undefined ? to.position.x : to.position.x + RUNNING_HUB_WORKFLOW_PORT_X * workflowScale;
+    const workflowPortY = runningHubWorkflowPortY(connection.toPort, workflowPortsOpen || Boolean(to.metadata?.runningHubWorkflowPortsOpen), workflowResource, workflowPortHeads);
+    const endX = workflowPortY === undefined ? to.position.x : to.position.x + runningHubWorkflowPortX(scale);
     const endY = connection.toPort
         ? to.position.y + (workflowPortY === undefined ? to.height / 2 : workflowPortY * workflowScale)
         : to.position.y + to.height / 2;
@@ -144,23 +146,23 @@ export function ConnectionPath({
     );
 }
 
-export function ActiveConnectionPath({ node, handle, mouseWorld, target, targetPortId, sourceWorkflowPortsOpen = false, sourceWorkflowResource, targetWorkflowPortsOpen = false, targetWorkflowResource, scale }: { node?: CanvasNodeData; handle: ConnectionHandle; mouseWorld: Position; target?: CanvasNodeData; targetPortId?: string; sourceWorkflowPortsOpen?: boolean; sourceWorkflowResource?: RunningHubResource; targetWorkflowPortsOpen?: boolean; targetWorkflowResource?: RunningHubResource; scale: number }) {
+export function ActiveConnectionPath({ node, handle, mouseWorld, target, targetPortId, sourceWorkflowPortsOpen = false, sourceWorkflowResource, sourceWorkflowPortHeads, targetWorkflowPortsOpen = false, targetWorkflowResource, targetWorkflowPortHeads, scale }: { node?: CanvasNodeData; handle: ConnectionHandle; mouseWorld: Position; target?: CanvasNodeData; targetPortId?: string; sourceWorkflowPortsOpen?: boolean; sourceWorkflowResource?: RunningHubResource; sourceWorkflowPortHeads?: RunningHubWorkflowPortHead[]; targetWorkflowPortsOpen?: boolean; targetWorkflowResource?: RunningHubResource; targetWorkflowPortHeads?: RunningHubWorkflowPortHead[]; scale: number }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     if (!node) return null;
 
     const sourceWorkflowScale = sourceWorkflowResource ? runningHubWorkflowContentScale(node) : 1;
     const targetWorkflowScale = target && targetWorkflowResource ? runningHubWorkflowContentScale(target) : 1;
-    const workflowPortY = runningHubWorkflowPortY(handle.portId, sourceWorkflowPortsOpen, sourceWorkflowResource);
-    const targetWorkflowPortY = runningHubWorkflowPortY(targetPortId, targetWorkflowPortsOpen, targetWorkflowResource);
+    const workflowPortY = runningHubWorkflowPortY(handle.portId, sourceWorkflowPortsOpen, sourceWorkflowResource, sourceWorkflowPortHeads);
+    const targetWorkflowPortY = runningHubWorkflowPortY(targetPortId, targetWorkflowPortsOpen, targetWorkflowResource, targetWorkflowPortHeads);
     const inputY = workflowPortY === undefined ? node.position.y + node.height / 2 : node.position.y + workflowPortY * sourceWorkflowScale;
-    const inputX = workflowPortY === undefined ? node.position.x : node.position.x + RUNNING_HUB_WORKFLOW_PORT_X * sourceWorkflowScale;
+    const inputX = workflowPortY === undefined ? node.position.x : node.position.x + runningHubWorkflowPortX(scale);
     const startX = handle.handleType === "source" ? node.position.x + node.width : mouseWorld.x;
     const startY = handle.handleType === "source" ? node.position.y + node.height / 2 : mouseWorld.y;
     const endX = handle.handleType === "source" ? mouseWorld.x : inputX;
     const endY = handle.handleType === "source" ? mouseWorld.y : inputY;
     const snappedStartX = handle.handleType === "target" && target ? target.position.x + target.width : startX;
     const snappedStartY = handle.handleType === "target" && target ? target.position.y + target.height / 2 : startY;
-    const snappedEndX = handle.handleType === "source" && target ? target.position.x + (targetWorkflowPortY === undefined ? 0 : RUNNING_HUB_WORKFLOW_PORT_X * targetWorkflowScale) : endX;
+    const snappedEndX = handle.handleType === "source" && target ? target.position.x + (targetWorkflowPortY === undefined ? 0 : runningHubWorkflowPortX(scale)) : endX;
     const snappedEndY = handle.handleType === "source" && target ? target.position.y + (targetWorkflowPortY === undefined ? target.height / 2 : targetWorkflowPortY * targetWorkflowScale) : endY;
     const distance = Math.abs(snappedEndX - snappedStartX);
     const pathD = `M ${snappedStartX} ${snappedStartY} C ${snappedStartX + distance * 0.5} ${snappedStartY}, ${snappedEndX - distance * 0.5} ${snappedEndY}, ${snappedEndX} ${snappedEndY}`;

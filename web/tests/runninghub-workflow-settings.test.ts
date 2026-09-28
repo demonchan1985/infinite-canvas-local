@@ -2,28 +2,30 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { RUNNING_HUB_ASPECT_RATIO_OPTIONS, resolveRunningHubWorkflowMaterialEnabledPorts, resolveRunningHubWorkflowRunOptions, runningHubWorkflowFieldControl, runningHubWorkflowInstanceLabel, runningHubWorkflowNumberLimits, toggleRunningHubWorkflowMaterialPort, type RunningHubWorkflowMaterialSlot } from "../src/components/canvas/runninghub-workflow-settings.ts";
+import { resolveRunningHubWorkflowMaterialEnabledPorts, resolveRunningHubWorkflowRunOptions, runningHubWorkflowFieldControl, runningHubWorkflowInstanceLabel, runningHubWorkflowNumberLimits, toggleRunningHubWorkflowMaterialPort, type RunningHubWorkflowMaterialSlot } from "../src/components/canvas/runninghub-workflow-settings.ts";
+import { resolveCreativeLibraryPlacement } from "../src/lib/canvas/canvas-creative-library-position.ts";
 import type { RunningHubWorkflowField } from "../src/stores/use-config-store.ts";
 
 const workflowPopoverSource = readFileSync(new URL("../src/components/canvas/canvas-runninghub-workflow-settings-popover.tsx", import.meta.url), "utf8");
 const promptPanelSource = readFileSync(new URL("../src/components/canvas/canvas-node-prompt-panel.tsx", import.meta.url), "utf8");
 const configNodePanelSource = readFileSync(new URL("../src/components/canvas/canvas-config-node-panel.tsx", import.meta.url), "utf8");
 const creativeToolsSource = readFileSync(new URL("../src/components/canvas/canvas-creative-tools.tsx", import.meta.url), "utf8");
+const workflowNodeSource = readFileSync(new URL("../src/components/canvas/canvas-runninghub-workflow-node.tsx", import.meta.url), "utf8");
 
 const field = (fieldName: string, label: string, type: RunningHubWorkflowField["type"] = "number"): RunningHubWorkflowField => ({ nodeId: "1", fieldName, key: `1.${fieldName}`, label, type, defaultValue: type === "number" ? 1 : "" });
 
-test("MiniMax H3 的真实字段使用对应参数控件", () => {
-    assert.equal(runningHubWorkflowFieldControl(field("aspect_ratio", "画面比例", "text")), "aspect-ratio");
-    assert.equal(runningHubWorkflowFieldControl(field("megapixels", "画面像素（MP）")), "megapixels");
-    assert.equal(runningHubWorkflowFieldControl(field("value", "视频时长（秒）")), "duration");
+test("参数控件不按字段名虚构比例列表、数值范围或二采流程开关", () => {
+    assert.equal(runningHubWorkflowFieldControl(field("aspect_ratio", "画面比例", "text")), "default");
+    assert.equal(runningHubWorkflowFieldControl(field("megapixels", "画面像素（MP）")), "default");
+    assert.equal(runningHubWorkflowFieldControl(field("value", "视频时长（秒）")), "default");
+    assert.equal(runningHubWorkflowFieldControl({ ...field("value", "视频时长（秒）"), min: 1, max: 120 }), "duration");
     assert.equal(runningHubWorkflowFieldControl(field("noise_seed", "随机种子")), "seed");
-    assert.equal(runningHubWorkflowFieldControl(field("value", "二采倍数")), "second-pass");
+    assert.equal(runningHubWorkflowFieldControl(field("value", "二采倍数")), "default");
 });
 
-test("时长和像素范围遵循 H3 评审定义", () => {
-    assert.deepEqual(runningHubWorkflowNumberLimits(field("value", "视频时长（秒）")), { min: 2, max: 15, step: 1 });
-    assert.deepEqual(runningHubWorkflowNumberLimits(field("megapixels", "画面像素（MP）")), { min: 0.2, max: 2, step: 0.1 });
-    assert.ok(RUNNING_HUB_ASPECT_RATIO_OPTIONS.includes("16:9 (Widescreen)"));
+test("范围只使用接口元数据，缺失时不以 H3 范围兜底", () => {
+    assert.deepEqual(runningHubWorkflowNumberLimits(field("value", "视频时长（秒）")), { min: undefined, max: undefined, step: undefined });
+    assert.deepEqual(runningHubWorkflowNumberLimits({ ...field("megapixels", "画面像素（MP）"), min: 0.5, max: 8, step: 0.5 }), { min: 0.5, max: 8, step: 0.5 });
 });
 
 const materialSlots: RunningHubWorkflowMaterialSlot[] = [
@@ -72,6 +74,27 @@ test("视频工作流设置以紧凑浮层从创作框架下方展开，而非�
     const configNodeWorkflowStart = configNodePanelSource.indexOf("mode === \"video\" && hasRunningHubWorkflowSettings(config)");
     const configNodeWorkflowTrigger = configNodePanelSource.slice(configNodeWorkflowStart, configNodePanelSource.indexOf("CanvasVideoSettingsPopover", configNodeWorkflowStart));
     assert.match(configNodeWorkflowTrigger, /placement="bottomRight"/);
+});
+
+test("工作流卡片的映射详情贴在卡片侧边，右侧不足时翻边并保持在可视区域", () => {
+    assert.match(workflowNodeSource, /placement="nodeRight"/);
+    assert.match(workflowPopoverSource, /closest\("\[data-rh-workflow-primary\]"\)/);
+    assert.match(workflowPopoverSource, /resolveCreativeLibraryPlacement/);
+    assert.match(workflowPopoverSource, /requestAnimationFrame\(trackCanvasPosition\)/);
+    assert.match(workflowPopoverSource, /Math\.min\(520, sidePlacement\.maxHeight\)/);
+
+    const viewport = { left: 0, top: 0, width: 1852, height: 1150 };
+    const beside = resolveCreativeLibraryPlacement({ left: 250, top: 245, right: 1078, bottom: 874, width: 828, height: 629 }, viewport, 520, 520);
+    assert.equal(beside.left, 1094);
+    assert.ok(beside.top >= 12 && beside.top + 520 <= 1138);
+
+    const flipped = resolveCreativeLibraryPlacement({ left: 1080, top: 650, right: 1750, bottom: 1050, width: 670, height: 400 }, viewport, 520, 520);
+    assert.equal(flipped.left, 544);
+    assert.ok(flipped.top >= 12 && flipped.top + 520 <= 1138);
+
+    const narrow = resolveCreativeLibraryPlacement({ left: 24, top: 100, right: 351, bottom: 600, width: 327, height: 500 }, { left: 0, top: 0, width: 375, height: 667 }, 520, 520);
+    assert.ok(narrow.left >= 12 && narrow.left + narrow.width <= 363);
+    assert.ok(narrow.top >= 12 && narrow.top + 520 <= 655);
 });
 
 test("创作框架的预设图标使用 44px 命中区，并在按钮级阻止画布拖拽", () => {

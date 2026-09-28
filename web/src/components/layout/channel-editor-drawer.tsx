@@ -1,9 +1,10 @@
 import { Button, Drawer, Input, Segmented, Select, Space } from "antd";
-import { ListPlus, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ExternalLink, ListPlus, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { fetchChannelModels } from "@/services/api/image";
+import { RUNNINGHUB_SITES, runningHubSiteFromBaseUrl, switchRunningHubSiteDrafts, type RunningHubSite } from "@/lib/runninghub-site";
 import { CODEX_IMAGE_MODELS, defaultBaseUrlForApiFormat, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
@@ -11,37 +12,47 @@ import { ModelSelectModal } from "./model-select-modal";
 type ScriptTarget = { name: string; capability: ModelCapability; value: string };
 
 /** 与 3101 保持同一套渠道编辑结构；RunningHub 的资源发现统一收敛在“选择模型”。 */
-export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: boolean; channel: ModelChannel | null; onSave: (channel: ModelChannel) => void; onClose: () => void }) {
+export function ChannelEditorDrawer({ open, channel, channels, onSave, onClose }: { open: boolean; channel: ModelChannel | null; channels: ModelChannel[]; onSave: (channels: ModelChannel[]) => void; onClose: () => void }) {
     const { t } = useTranslation();
     const [draft, setDraft] = useState<ModelChannel | null>(channel);
+    const [otherDraft, setOtherDraft] = useState<ModelChannel | null>(null);
     const [selectOpen, setSelectOpen] = useState(false);
     const [scriptTarget, setScriptTarget] = useState<ScriptTarget | null>(null);
     const [loadingCodexModels, setLoadingCodexModels] = useState(false);
     const [codexCliStatus, setCodexCliStatus] = useState("");
     const [codexCliError, setCodexCliError] = useState(false);
-    const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
-        { label: "OpenAI", value: "openai" },
-        { label: "Gemini", value: "gemini" },
-        { label: "OpenAI CLI（Codex）", value: "codex-cli" },
-        { label: "RunningHub", value: "runninghub" },
+    const apiFormatOptions: Array<{ label: ReactNode; value: ApiCallFormat }> = [
+        { label: <span className="inline-flex items-center gap-2"><img src="/icons/openai.svg" alt="" className="size-4 dark:invert" />OpenAI</span>, value: "openai" },
+        { label: <span className="inline-flex items-center gap-2"><img src="/icons/gemini.svg" alt="" className="size-4" />Gemini</span>, value: "gemini" },
+        { label: <span className="inline-flex items-center gap-2"><img src="/icons/openai.svg" alt="" className="size-4 dark:invert" />OpenAI CLI（Codex）</span>, value: "codex-cli" },
+        { label: <span className="inline-flex items-center gap-2"><img src="/icons/runninghub.svg" alt="" className="size-4" />RunningHub</span>, value: "runninghub" },
     ];
     const capabilityOptions: Array<{ label: string; value: ModelCapability }> = ["image", "video", "text", "audio"].map((value) => ({ label: t(`config.channelEditor.capabilities.${value}`), value: value as ModelCapability }));
 
     useEffect(() => {
         if (open && channel) {
             setDraft(channel);
+            setOtherDraft(null);
             setCodexCliStatus("");
             setCodexCliError(false);
         }
     }, [open, channel]);
 
     if (!draft) return null;
+    const runningHubSite = runningHubSiteFromBaseUrl(draft.baseUrl);
 
     const patch = (value: Partial<ModelChannel>) => setDraft((current) => (current ? { ...current, ...value } : current));
     const setModels = (models: ChannelModel[]) => patch({ models });
     const changeApiFormat = (apiFormat: ApiCallFormat) => {
-        const baseUrl = apiFormat === "codex-cli" || !draft.baseUrl.trim() || draft.baseUrl.trim() === defaultBaseUrlForApiFormat(draft.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : draft.baseUrl;
+        const baseUrl = apiFormat === "runninghub" || apiFormat === "codex-cli" || draft.apiFormat === "runninghub" || !draft.baseUrl.trim() || draft.baseUrl.trim() === defaultBaseUrlForApiFormat(draft.apiFormat) ? defaultBaseUrlForApiFormat(apiFormat) : draft.baseUrl;
+        if (apiFormat !== "runninghub") setOtherDraft(null);
         patch({ apiFormat, baseUrl, ...(apiFormat === "codex-cli" ? { apiKey: "" } : {}) });
+    };
+    const changeRunningHubSite = (site: RunningHubSite) => {
+        if (runningHubSiteFromBaseUrl(draft.baseUrl) === site) return;
+        const next = switchRunningHubSiteDrafts(channels, draft, otherDraft, site);
+        setDraft(next.draft);
+        setOtherDraft(next.otherDraft);
     };
     const checkCodexCli = async (loadModels: boolean) => {
         setLoadingCodexModels(true);
@@ -65,7 +76,8 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     const setScript = (name: string, script: string) => setModels(draft.models.map((model) => (model.name === name ? { ...model, script: script || undefined } : model)));
     const removeModel = (name: string) => setModels(draft.models.filter((model) => model.name !== name));
     const save = () => {
-        onSave({ ...draft, name: draft.name.trim() || t("config.channels.unnamed"), models: normalizeChannelModels(draft.models) });
+        const drafts = draft.apiFormat === "runninghub" && otherDraft ? [draft, otherDraft] : [draft];
+        onSave(drafts.map((item) => ({ ...item, name: item.name.trim() || t("config.channels.unnamed"), models: normalizeChannelModels(item.models) })));
         onClose();
     };
 
@@ -96,7 +108,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                 </label>
                 <label className="block md:col-span-2">
                     <span className="mb-1 block text-sm font-medium">{draft.apiFormat === "codex-cli" ? "本地画布服务地址" : t("config.channelEditor.baseUrl")}</span>
-                    <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" disabled={draft.apiFormat === "codex-cli"} />
+                    <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" disabled={draft.apiFormat === "codex-cli" || draft.apiFormat === "runninghub"} />
                 </label>
                 {draft.apiFormat === "codex-cli" ? (
                     <div className="rounded-lg border border-dashed border-stone-300 px-3 py-3 text-sm text-stone-600 dark:border-stone-700 dark:text-stone-300 md:col-span-2">
@@ -112,16 +124,23 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                     </div>
                 ) : draft.apiFormat === "runninghub" ? (
                     <div className="space-y-4 md:col-span-2">
-                        <label className="block">
-                            <span className="mb-1 block text-sm font-medium">企业级-共享 API Key（按量付费）</span>
-                            <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="用于标准模型与 LLM" />
+                        <div>
+                            <span className="mb-1 block text-sm font-medium">RunningHub 站点</span>
+                            <Segmented block value={runningHubSite} onChange={(value) => changeRunningHubSite(value as RunningHubSite)} options={[{ label: "国内站 CN", value: "cn" }, { label: "国际站 AI", value: "ai" }]} />
+                            <span className="mt-1 block text-xs text-stone-500">CN 与 AI 的 Key 和模型分别保存，切换不会清空。</span>
+                        </div>
+                        <div className="block">
+                            <label htmlFor="runninghub-shared-key" className="mb-1 block text-sm font-medium">企业级-共享 API Key（按量付费）</label>
+                            <Input.Password id="runninghub-shared-key" value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="用于标准模型与 LLM" />
                             <span className="mt-1 block text-xs text-stone-500">用于标准生图、视频、音频模型和 LLM。</span>
-                        </label>
-                        <label className="block">
-                            <span className="mb-1 block text-sm font-medium">消费级 API Key（消耗 RH 币）</span>
-                            <Input.Password value={draft.consumerApiKey || ""} onChange={(event) => patch({ consumerApiKey: event.target.value })} placeholder="用于 AI 应用与工作流" />
+                            <span className="mt-1 flex text-xs"><a href={RUNNINGHUB_SITES[runningHubSite].sharedKeyUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1">获取{runningHubSite === "cn" ? "国内站" : "国际站"}企业 Key <ExternalLink aria-hidden="true" className="size-3" /></a></span>
+                        </div>
+                        <div className="block">
+                            <label htmlFor="runninghub-consumer-key" className="mb-1 block text-sm font-medium">消费级 API Key（消耗 RH 币）</label>
+                            <Input.Password id="runninghub-consumer-key" value={draft.consumerApiKey || ""} onChange={(event) => patch({ consumerApiKey: event.target.value })} placeholder="用于 AI 应用与工作流" />
                             <span className="mt-1 block text-xs text-stone-500">仅用于 AI 应用和工作流。</span>
-                        </label>
+                            <span className="mt-1 flex text-xs"><a href={RUNNINGHUB_SITES[runningHubSite].consumerKeyUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1">获取{runningHubSite === "cn" ? "国内站" : "国际站"}消费 Key <ExternalLink aria-hidden="true" className="size-3" /></a></span>
+                        </div>
                     </div>
                 ) : (
                     <label className="block md:col-span-2">

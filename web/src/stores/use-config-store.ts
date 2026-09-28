@@ -4,7 +4,8 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
-import { defaultRunningHubAiAppFields, defaultRunningHubWorkflowFields, runningHubWorkflowScript } from "@/lib/runninghub-model";
+import { canonicalRunningHubWorkflowId, defaultRunningHubAiAppFields, defaultRunningHubWorkflowFields, runningHubWorkflowScript } from "@/lib/runninghub-model";
+import { RUNNINGHUB_SITES, runningHubSiteFromBaseUrl } from "@/lib/runninghub-site";
 
 export type ApiCallFormat = "openai" | "gemini" | "codex-cli" | "runninghub";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -22,6 +23,8 @@ export type RunningHubWorkflowField = RunningHubNodeBinding & {
     /** 在画布中显示的字段标题；值会原样写入 RunningHub nodeInfoList。 */
     key: string;
     label: string;
+    /** RH 接口返回的原说明；缺失时不得用画布提交状态或推测文案代替。 */
+    description?: string;
     type: "text" | "number" | "select" | "boolean";
     defaultValue: RunningHubWorkflowFieldValue;
     options?: Array<string | number>;
@@ -40,6 +43,15 @@ export type RunningHubWorkflowPreview = {
     secondPassFieldKey?: string;
 };
 
+export type RunningHubWorkflowNode = {
+    id: string;
+    classType: string;
+    title: string;
+    /** 仅保存输入名称与来源节点，不保存提示词、素材地址等实际值。 */
+    inputs: string[];
+    links: Array<{ input: string; fromNodeId: string }>;
+};
+
 export type RunningHubResource = {
     kind: RunningHubResourceKind;
     /** RunningHub 标准模型路径，或 AI 应用 / 工作流 ID。 */
@@ -56,6 +68,10 @@ export type RunningHubResource = {
     /** 从已发布工作流读取的可覆盖字段。 */
     workflowFields?: RunningHubWorkflowField[];
     workflowPreview?: RunningHubWorkflowPreview;
+    /** 只读诊断用的完整工作流节点摘要，不参与 nodeInfoList。 */
+    workflowNodes?: RunningHubWorkflowNode[];
+    /** API 格式实际暴露的可提交节点字段，不包含完整工作流的内部控件。 */
+    apiFieldKeys?: string[];
     accessPassword?: string;
 };
 
@@ -124,8 +140,7 @@ export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
-const RUNNINGHUB_BASE_URL = "https://www.runninghub.cn";
-const RUNNINGHUB_LLM_BASE_URL = "https://llm.runninghub.cn";
+const RUNNINGHUB_BASE_URL = RUNNINGHUB_SITES.cn.baseUrl;
 export const CODEX_IMAGE_CHANNEL_ID = "codex-image";
 export const CODEX_IMAGE_MODEL = "gpt-image-2";
 export const GPT_IMAGE_25_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] as const;
@@ -416,7 +431,7 @@ function normalizeRunningHubBinding(binding: RunningHubNodeBinding | undefined) 
 
 function normalizeRunningHubResource(resource: RunningHubResource | undefined): RunningHubResource | undefined {
     if (!resource || !["standard", "app", "workflow"].includes(resource.kind)) return undefined;
-    const target = resource.target?.trim() || "";
+    const target = resource.kind === "workflow" ? canonicalRunningHubWorkflowId(resource.target?.trim() || "") : resource.target?.trim() || "";
     if (!target) return undefined;
     const imageBindings = (resource.imageBindings || []).map(normalizeRunningHubBinding).filter((binding): binding is RunningHubNodeBinding => Boolean(binding));
     const videoBindings = (resource.videoBindings || []).map(normalizeRunningHubBinding).filter((binding): binding is RunningHubNodeBinding => Boolean(binding));
@@ -426,16 +441,17 @@ function normalizeRunningHubResource(resource: RunningHubResource | undefined): 
     const orderedImageBindings = legacyH3Order.length
         ? [...legacyH3Order.flatMap((nodeId) => imageBindings.filter((binding) => binding.nodeId === nodeId)), ...imageBindings.filter((binding) => !legacyH3Order.includes(binding.nodeId))]
         : imageBindings;
+    const verifiedFields = resource.kind === "workflow" && Array.isArray(resource.apiFieldKeys) ? new Set(resource.apiFieldKeys) : null;
     const workflowFields: RunningHubWorkflowField[] = (resource.workflowFields || []).flatMap((field) => {
             const binding = normalizeRunningHubBinding(field);
             const key = field?.key?.trim() || (binding ? `${binding.nodeId}.${binding.fieldName}` : "");
             const label = field?.label?.trim() || field?.fieldName?.trim() || "";
-            if (!binding || !key || !label || !["text", "number", "select", "boolean"].includes(field.type)) return [];
+            if (!binding || !key || !label || (verifiedFields && !verifiedFields.has(key)) || !["text", "number", "select", "boolean"].includes(field.type)) return [];
             const defaultValue = typeof field.defaultValue === "number" || typeof field.defaultValue === "boolean" ? field.defaultValue : String(field.defaultValue ?? "");
             const optionLabels = Object.fromEntries(Object.entries(field.optionLabels || {}).flatMap(([value, optionLabel]) => typeof optionLabel === "string" && optionLabel.trim() ? [[value, optionLabel.trim()]] : []));
             return [{ ...binding, key, label, type: field.type, defaultValue, options: (field.options || []).filter((option) => option !== "" && option !== null && option !== undefined), ...(Object.keys(optionLabels).length ? { optionLabels } : {}), min: typeof field.min === "number" ? field.min : undefined, max: typeof field.max === "number" ? field.max : undefined, step: typeof field.step === "number" ? field.step : undefined }];
         });
-    const defaultWorkflowFields = [...defaultRunningHubWorkflowFields(target), ...(resource.kind === "app" ? defaultRunningHubAiAppFields(target) : [])];
+    const defaultWorkflowFields = [...(verifiedFields ? [] : defaultRunningHubWorkflowFields(target)), ...(resource.kind === "app" ? defaultRunningHubAiAppFields(target) : [])];
     const mergedWorkflowFields = [
         ...workflowFields.map((field) => {
             const fallback = defaultWorkflowFields.find((candidate) => candidate.key === field.key);
@@ -470,6 +486,11 @@ function normalizeRunningHubResource(resource: RunningHubResource | undefined): 
         audioBindings,
         workflowFields: mergedWorkflowFields,
         workflowPreview,
+        apiFieldKeys: Array.isArray(resource.apiFieldKeys) ? [...new Set(resource.apiFieldKeys.filter((key): key is string => typeof key === "string" && /^\d+\.[^\s.].*$/.test(key)))] : undefined,
+        workflowNodes: Array.isArray(resource.workflowNodes) ? resource.workflowNodes.flatMap((node) => {
+            if (!node || typeof node.id !== "string" || typeof node.classType !== "string" || !Array.isArray(node.inputs) || !Array.isArray(node.links)) return [];
+            return [{ id: node.id, classType: node.classType, title: typeof node.title === "string" ? node.title : "", inputs: node.inputs.filter((name): name is string => typeof name === "string"), links: node.links.filter((link) => typeof link?.input === "string" && typeof link.fromNodeId === "string").map((link) => ({ input: link.input, fromNodeId: link.fromNodeId })) }];
+        }) : undefined,
         accessPassword: resource.accessPassword?.trim() || undefined,
     };
 }
@@ -560,7 +581,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         ...config,
         model,
         // RunningHub 的标准模型请求官网任务 API；只有文本 LLM 使用兼容接口。
-        baseUrl: channel.apiFormat === "runninghub" && selectedModel?.capability === "text" ? RUNNINGHUB_LLM_BASE_URL : channel.baseUrl,
+        baseUrl: channel.apiFormat === "runninghub" && selectedModel?.capability === "text" && !selectedModel.runningHub ? RUNNINGHUB_SITES[runningHubSiteFromBaseUrl(channel.baseUrl)].llmBaseUrl : channel.baseUrl,
         apiKey: usesRunningHubConsumerKey ? channel.consumerApiKey || "" : channel.apiKey,
         apiFormat: channel.apiFormat,
     };
@@ -570,11 +591,11 @@ function normalizeChannels(config: AiConfig) {
     const persistedChannels = Array.isArray(config.channels) ? config.channels : [];
     const channels = persistedChannels.map((channel, index) => {
         const channelId = channel.id || (index === 0 ? "default" : `channel-${index + 1}`);
-        const legacyRunningHubLlmBase = channel.apiFormat === "runninghub" && channel.baseUrl?.trim().replace(/\/+$/, "") === RUNNINGHUB_LLM_BASE_URL;
+        const legacyRunningHubLlmBase = channel.apiFormat === "runninghub" && (channel.baseUrl?.trim().replace(/\/+$/, "") === RUNNINGHUB_SITES.cn.llmBaseUrl || channel.baseUrl?.trim().replace(/\/+$/, "") === RUNNINGHUB_SITES.ai.llmBaseUrl);
         return createModelChannel({
             ...channel,
             ...(channel.id === CODEX_TEXT_CHANNEL_ID ? { apiFormat: "codex-cli" as const, apiKey: "" } : {}),
-            ...(legacyRunningHubLlmBase ? { baseUrl: RUNNINGHUB_BASE_URL } : {}),
+            ...(legacyRunningHubLlmBase ? { baseUrl: RUNNINGHUB_SITES[runningHubSiteFromBaseUrl(channel.baseUrl)].baseUrl } : {}),
             id: channelId,
             name: channel.name || (index === 0 ? i18n.t("config.channels.defaultName") : i18n.t("config.channels.indexedName", { index: index + 1 })),
             models: channelId === CODEX_IMAGE_CHANNEL_ID || normalizeApiFormat(channel.apiFormat) === "codex-cli" || (channelId === "default" && normalizeApiFormat(channel.apiFormat) === "openai") ? mergeDefaultGptImageModels(channel.models) : normalizeChannelModels(channel.models),

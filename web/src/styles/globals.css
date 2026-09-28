@@ -206,7 +206,8 @@ html[data-canvas-tone] :is(.ant-input, .ant-input-affix-wrapper, .ant-select-sel
         cursor: text !important;
     }
 
-    [data-canvas-tool="pan"] :is(button, [role="button"], a, label) {
+    [data-canvas-tool="pan"] :where(button, [role="button"], a, label),
+    [data-canvas-tool="pan"] :where(button, [role="button"], a, label) :where(:not(input, textarea, select, [contenteditable="true"])) {
         cursor: pointer !important;
     }
 

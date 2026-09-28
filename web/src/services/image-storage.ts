@@ -18,6 +18,7 @@ const previewStore = localforage.createInstance({ name: "infinite-canvas", store
 const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 const objectUrls = new Map<string, string>();
+const pendingUrls = new Map<string, Promise<string | undefined>>();
 const previewUrls = new Map<string, string>();
 const previewListeners = new Set<() => void>();
 const queuedPreviewKeys = new Set<string>();
@@ -143,11 +144,25 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    return url;
+    let pending = pendingUrls.get(storageKey);
+    if (!pending) {
+        const request: Promise<string | undefined> = store.getItem<Blob>(storageKey)
+            .then((blob) => {
+                const current = objectUrls.get(storageKey);
+                // 删除或替换会使旧读取失效，避免重新缓存旧资源。
+                if (current || pendingUrls.get(storageKey) !== request) return current;
+                if (!blob) return undefined;
+                const url = URL.createObjectURL(blob);
+                objectUrls.set(storageKey, url);
+                return url;
+            })
+            .finally(() => {
+                if (pendingUrls.get(storageKey) === request) pendingUrls.delete(storageKey);
+            });
+        pendingUrls.set(storageKey, request);
+        pending = request;
+    }
+    return (await pending) || fallback;
 }
 
 export async function getImageBlob(storageKey: string) {
@@ -216,10 +231,13 @@ async function deleteImagePreview(storageKey: string) {
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
-    await deleteImagePreview(storageKey);
-    await storeImagePreview(storageKey, blob);
+    pendingUrls.delete(storageKey);
+    const previous = objectUrls.get(storageKey);
+    if (previous) URL.revokeObjectURL(previous);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
+    await deleteImagePreview(storageKey);
+    await storeImagePreview(storageKey, blob);
     return url;
 }
 
@@ -232,11 +250,12 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
 export async function deleteStoredImages(keys: Iterable<string>) {
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
+            await store.removeItem(key);
+            pendingUrls.delete(key);
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
             await deleteImagePreview(key);
-            await store.removeItem(key);
         }),
     );
 }

@@ -136,7 +136,6 @@ export type CanvasNodeMetadata = {
     naturalWidth?: number;
     naturalHeight?: number;
     imageDisplayScale?: "standard-v2" | "primary-v1";
-    freeResize?: boolean;
     images?: CanvasNodeImage[];
     primaryImageId?: string;
     storageKey?: string;

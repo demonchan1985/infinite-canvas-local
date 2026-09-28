@@ -26,6 +26,10 @@ export function runningHubAccountKey(channels: ModelChannel[]) {
     return (channel?.consumerApiKey || channel?.apiKey || "").trim();
 }
 
+export function runningHubAccountBaseUrl(channels: ModelChannel[]) {
+    return channels.find((item) => item.apiFormat === "runninghub" && (item.consumerApiKey?.trim() || item.apiKey.trim()))?.baseUrl || "";
+}
+
 export function parseRunningHubAccountStatus(value: unknown): RunningHubAccountStatus {
     const payload = value && typeof value === "object" ? value as RunningHubAccountPayload : {};
     if (Number(payload.code) !== 0 || !payload.data) throw new Error(payload.msg || payload.message || payload.error?.message || "RunningHub 账户状态读取失败");
@@ -37,11 +41,11 @@ export function parseRunningHubAccountStatus(value: unknown): RunningHubAccountS
     };
 }
 
-export async function fetchRunningHubAccountStatus(apiKey: string, signal?: AbortSignal) {
+export async function fetchRunningHubAccountStatus(apiKey: string, baseUrl: string, signal?: AbortSignal) {
     const response = await fetch("/api/runninghub/account-status", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ apiKey }),
+        body: JSON.stringify({ apiKey, baseUrl }),
         signal,
     });
     const payload = await response.json().catch(() => ({}));

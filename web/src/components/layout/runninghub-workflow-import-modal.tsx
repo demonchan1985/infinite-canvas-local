@@ -4,19 +4,23 @@ import { useEffect, useState } from "react";
 
 import { createRunningHubAiAppModel, createRunningHubWorkflowModel, mergeRunningHubWorkflowBindings, parseRunningHubAiApp, parseRunningHubWorkflowBindings, runningHubAiAppId, runningHubWorkflowId } from "@/lib/runninghub-model";
 import { warmRunningHubCover } from "@/lib/runninghub-cover";
+import { RUNNINGHUB_SITES, runningHubSiteFromBaseUrl } from "@/lib/runninghub-site";
 import { fetchRunningHubAiAppInfo, fetchRunningHubWorkflowInfo, fetchRunningHubWorkflowTitle } from "@/services/api/image";
 import type { ChannelModel, ModelChannel, RunningHubWorkflowField, RunningHubWorkflowFieldValue } from "@/stores/use-config-store";
 
 type ImportKind = "workflow" | "app";
-type WorkflowDraft = { kind: ImportKind; target: string; name: string; model: ChannelModel; fromJson: boolean };
+type WorkflowDraft = { kind: ImportKind; target: string; name: string; model: ChannelModel; fromJson: boolean; channelId: string };
 
-export function RunningHubWorkflowImportModal({ open, channel, onClose, onImported }: { open: boolean; channel: ModelChannel | null; onClose: () => void; onImported: (model: ChannelModel) => void }) {
+export function RunningHubWorkflowImportModal({ open, channels, onClose, onImported }: { open: boolean; channels: ModelChannel[]; onClose: () => void; onImported: (model: ChannelModel, channelId: string) => void }) {
     const { message } = App.useApp();
     const [source, setSource] = useState("");
     const [workflowFile, setWorkflowFile] = useState<UploadFile | null>(null);
     const [reading, setReading] = useState(false);
     const [draft, setDraft] = useState<WorkflowDraft | null>(null);
     const [kind, setKind] = useState<ImportKind>("workflow");
+    const [channelId, setChannelId] = useState("");
+    const runningHubChannels = channels.filter((item) => item.apiFormat === "runninghub");
+    const channel = runningHubChannels.find((item) => item.id === channelId) || runningHubChannels[0] || null;
 
     useEffect(() => {
         if (!open) return;
@@ -24,29 +28,36 @@ export function RunningHubWorkflowImportModal({ open, channel, onClose, onImport
         setWorkflowFile(null);
         setDraft(null);
         setKind("workflow");
+        setChannelId(runningHubChannels[0]?.id || "");
     }, [open]);
 
     const readImport = async () => {
         const target = kind === "app" ? runningHubAiAppId(source) : runningHubWorkflowId(source.trim());
-        if (!target) return message.error(kind === "app" ? "请输入 AI 应用详情链接、AI 应用 API 手册链接或数字 ID" : "请输入 RunningHub API 链接或数字 ID");
+        if (!target) return message.error(kind === "app" ? "请输入 AI 应用详情链接、AI 应用 API 手册链接或数字 ID" : "请输入 RunningHub 工作流页、分享页、API 手册链接或数字 ID");
+        if (!channel) return message.error("请先在渠道设置新增 RunningHub 渠道");
+        try {
+            const sourceHost = new URL(source.trim()).hostname.replace(/^www\./, "");
+            if ((sourceHost === "runninghub.cn" || sourceHost === "runninghub.ai") && sourceHost !== `runninghub.${runningHubSiteFromBaseUrl(channel.baseUrl)}`) return message.error("链接站点与所选渠道不一致，请切换渠道后重试");
+        } catch { /* 纯数字 ID 无需验证域名。 */ }
         if (!channel?.consumerApiKey?.trim()) return message.error("请先在渠道设置填写 RunningHub 消费级 API Key");
         setReading(true);
         try {
             if (kind === "app") {
                 const imported = parseRunningHubAiApp(await fetchRunningHubAiAppInfo(channel, target), target);
-                setDraft({ kind, target, name: imported.name, model: createRunningHubAiAppModel(imported), fromJson: false });
+                setDraft({ kind, target, name: imported.name, model: createRunningHubAiAppModel(imported), fromJson: false, channelId: channel.id });
             } else {
                 const apiPayload = await fetchRunningHubWorkflowInfo(channel, target);
                 const apiBindings = parseRunningHubWorkflowBindings(apiPayload);
+                if (!apiBindings.workflowNodes?.length) throw new Error("RunningHub 未返回可识别的工作流 API 图，未保存空映射");
                 const uploadedJson = workflowFile?.originFileObj || (workflowFile && typeof (workflowFile as unknown as File).text === "function" ? (workflowFile as unknown as File) : null);
                 const rawPayload = uploadedJson ? JSON.parse(await uploadedJson.text()) : null;
                 const bindings = mergeRunningHubWorkflowBindings(apiBindings, rawPayload ? parseRunningHubWorkflowBindings(rawPayload) : null);
                 const fileName = workflowFile?.name?.replace(/\.json$/i, "").trim();
-                const rhTitle = await fetchRunningHubWorkflowTitle(target).catch(() => "");
+                const rhTitle = await fetchRunningHubWorkflowTitle(target, channel.baseUrl).catch(() => "");
                 const name = rhTitle || fileName || `工作流 ${target}`;
-                setDraft({ kind, target, name, model: createRunningHubWorkflowModel(target, bindings, name, rhTitle || name), fromJson: Boolean(rawPayload) });
+                setDraft({ kind, target, name, model: createRunningHubWorkflowModel(target, bindings, name, rhTitle || name), fromJson: Boolean(rawPayload), channelId: channel.id });
             }
-            void warmRunningHubCover(kind, target);
+            void warmRunningHubCover(kind, target, channel.baseUrl);
         } catch (error) {
             message.error(error instanceof Error ? error.message : kind === "app" ? "读取 AI 应用失败" : "读取工作流失败");
         } finally {
@@ -55,6 +66,7 @@ export function RunningHubWorkflowImportModal({ open, channel, onClose, onImport
     };
 
     const updateDraftName = (name: string) => setDraft((current) => (current ? { ...current, name, model: { ...current.model, name } } : current));
+    const updateDraftCapability = (capability: "image" | "video" | "audio") => setDraft((current) => current ? { ...current, model: { ...current.model, capability } } : current);
     const updateDraftField = (key: string, value: RunningHubWorkflowFieldValue) =>
         setDraft((current) => {
             if (!current?.model.runningHub) return current;
@@ -63,7 +75,7 @@ export function RunningHubWorkflowImportModal({ open, channel, onClose, onImport
         });
     const applyDraft = () => {
         if (!draft) return;
-        onImported(draft.model);
+        onImported(draft.model, draft.channelId);
         message.success(`已保存 ${draft.kind === "app" ? "AI 应用" : "工作流"}：${draft.name}`);
         onClose();
     };
@@ -93,23 +105,24 @@ export function RunningHubWorkflowImportModal({ open, channel, onClose, onImport
             }
         >
             {draft ? (
-                <WorkflowPreview draft={draft} fields={fields} preview={preview} onNameChange={updateDraftName} onFieldChange={updateDraftField} />
+                <WorkflowPreview draft={draft} fields={fields} preview={preview} onNameChange={updateDraftName} onCapabilityChange={updateDraftCapability} onFieldChange={updateDraftField} />
             ) : (
                 <div className="space-y-4">
+                    <label className="block"><span className="mb-1 block text-sm font-medium">RunningHub 站点与渠道</span><Select className="w-full" value={channel?.id} onChange={setChannelId} disabled={reading} options={runningHubChannels.map((item) => ({ value: item.id, label: `${runningHubSiteFromBaseUrl(item.baseUrl) === "ai" ? "国际站 AI" : "国内站 CN"} · ${item.name}` }))} placeholder="先添加 RunningHub 渠道" /></label>
                     <Segmented block value={kind} onChange={(value) => { setKind(value as ImportKind); setSource(""); setWorkflowFile(null); }} options={[{ value: "workflow", label: <span className="inline-flex items-center gap-1.5"><Workflow className="size-4" />云端工作流</span> }, { value: "app", label: <span className="inline-flex items-center gap-1.5"><AppWindow className="size-4" />AI 应用</span> }]} />
-                    <p className="m-0 text-sm text-stone-500">{kind === "app" ? "读取 AI 应用实际公开的 nodeInfoList，生成精确的提示词、图片、视频、音频端口与参数预览；不会创建任务或改动渠道。" : "先读取发布 API，再用完整工作流 JSON 建立素材槽位和参数预览；此步骤不会创建任务或改动渠道。"}</p>
-                    <Input value={source} onChange={(event) => setSource(event.target.value)} onPressEnter={() => void readImport()} placeholder={kind === "app" ? "https://www.runninghub.cn/ai-detail/… 或 AI 应用 API 手册链接" : "https://www.runninghub.cn/call-api/api-detail/…"} />
+                    <p className="m-0 text-sm text-stone-500">{kind === "app" ? "读取 AI 应用实际公开的 nodeInfoList，生成精确的提示词、图片、视频、音频端口与参数预览；不会创建任务或改动渠道。" : "以 RH 返回的 API 图建立可提交端口与参数；完整工作流 JSON 只补充节点诊断。读取不会创建任务。"}</p>
+                    <Input value={source} onChange={(event) => setSource(event.target.value)} onPressEnter={() => void readImport()} placeholder={kind === "app" ? `${RUNNINGHUB_SITES[runningHubSiteFromBaseUrl(channel?.baseUrl || "")].baseUrl}/ai-detail/… 或 AI 应用 API 手册链接` : `${RUNNINGHUB_SITES[runningHubSiteFromBaseUrl(channel?.baseUrl || "")].baseUrl}/call-api/api-detail/…`} />
                     {kind === "workflow" ? <><Upload accept="application/json,.json" maxCount={1} fileList={workflowFile ? [workflowFile] : []} beforeUpload={() => false} onChange={({ file }) => setWorkflowFile(file)} onRemove={() => { setWorkflowFile(null); return true; }}>
-                        <Button icon={<UploadCloud className="size-4" />}>上传完整工作流 JSON（推荐）</Button>
+                        <Button icon={<UploadCloud className="size-4" />}>上传完整工作流 JSON（补充节点诊断）</Button>
                     </Upload>
-                    <div className="rounded-lg border border-dashed p-3 text-xs text-stone-500">没有 JSON 时仅能预览发布 API 当前暴露的字段；上传从 RunningHub 导出的完整 JSON 后，才能识别未连接的备用参考图、视频和音频槽位。</div></> : <div className="rounded-lg border border-dashed p-3 text-xs text-stone-500">AI 应用不上传工作流 JSON。只以 RunningHub 返回的公开字段建立节点，不把应用名称或网页表单猜成 API 参数。</div>}
+                    <div className="rounded-lg border border-dashed p-3 text-xs text-stone-500">可上传从 RH 导出的完整 JSON 查看更多节点和连线；只有 API 图中存在的字段会成为可提交参数或素材槽。</div></> : <div className="rounded-lg border border-dashed p-3 text-xs text-stone-500">AI 应用不上传工作流 JSON。只以 RunningHub 返回的公开字段建立节点，不把应用名称或网页表单猜成 API 参数。</div>}
                 </div>
             )}
         </Modal>
     );
 }
 
-function WorkflowPreview({ draft, fields, preview, onNameChange, onFieldChange }: { draft: WorkflowDraft; fields: RunningHubWorkflowField[]; preview: { imageSlots: number; videoSlots: number; audioSlots: number; secondPassFieldKey?: string }; onNameChange: (name: string) => void; onFieldChange: (key: string, value: RunningHubWorkflowFieldValue) => void }) {
+function WorkflowPreview({ draft, fields, preview, onNameChange, onCapabilityChange, onFieldChange }: { draft: WorkflowDraft; fields: RunningHubWorkflowField[]; preview: { imageSlots: number; videoSlots: number; audioSlots: number; secondPassFieldKey?: string }; onNameChange: (name: string) => void; onCapabilityChange: (capability: "image" | "video" | "audio") => void; onFieldChange: (key: string, value: RunningHubWorkflowFieldValue) => void }) {
     return (
         <div className="space-y-5">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
@@ -121,6 +134,7 @@ function WorkflowPreview({ draft, fields, preview, onNameChange, onFieldChange }
                 <SlotSummary label="参考视频槽位" count={preview.videoSlots} />
                 <SlotSummary label="参考音频槽位" count={preview.audioSlots} />
             </div>
+            {draft.kind === "workflow" ? <label className="block text-sm"><span className="mb-1 block font-medium">输出类型</span><Select className="w-full" value={draft.model.capability === "text" ? "video" : draft.model.capability} onChange={onCapabilityChange} options={[{ value: "image", label: "图片" }, { value: "video", label: "视频" }, { value: "audio", label: "音频" }]} /><span className="mt-1 block text-xs text-stone-500">根据 API 图自动识别；自定义输出节点未识别时可在保存前手动更正。</span></label> : null}
             <div className="rounded-xl border bg-stone-50/60 p-4 dark:bg-white/[0.03]">
                 <div className="mb-1 font-medium">{draft.kind === "app" ? "AI 应用参数预览" : "工作流参数预览"}</div>
                 <p className="mb-3 text-xs text-stone-500">这里改的是导入后的默认值；保存后仍可在画布节点中按次覆盖。素材字段在画布里按编号连接，不与参数混在一起。</p>

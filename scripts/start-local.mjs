@@ -25,7 +25,7 @@ try {
     process.exit(1);
 }
 
-const agent = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "src/index.ts"], { cwd: path.join(root, "canvas-agent"), env: { ...process.env, PORT: String(agentPort) }, stdio: ["ignore", "pipe", "inherit"] });
+const agent = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "src/index.ts"], { cwd: path.join(root, "canvas-agent"), env: { ...process.env, PORT: String(agentPort), CANVAS_LOCAL_LAUNCHER_ROOT: root }, stdio: ["ignore", "pipe", "inherit"] });
 const web = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "3102", "--strictPort"], { cwd: path.join(root, "web"), stdio: ["ignore", "pipe", "inherit"] });
 let stopping = false;
 let opened = false;

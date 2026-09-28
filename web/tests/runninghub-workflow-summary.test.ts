@@ -94,7 +94,7 @@ test("深色画布标题和激活区域使用高饱和蓝色，而非沉灰色",
 });
 
 test("RH 卡片只由外层包住四角，标题只保留底部分隔", () => {
-    assert.match(canvasNodeSource, /relative h-full w-full overflow-visible rounded-xl border/);
+    assert.match(canvasNodeSource, /className={`relative h-full w-full overflow-visible border \$\{hasImageContent \? "rounded-3xl" : "rounded-xl"\}`}/);
     assert.match(workflowNodeSource, /h-14 shrink-0 items-center gap-3 border-b px-4/);
     assert.doesNotMatch(workflowNodeSource, /h-14 shrink-0 items-center gap-3 border px-4 rounded-t-\[inherit\]/);
 });

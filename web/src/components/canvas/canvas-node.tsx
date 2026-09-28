@@ -10,7 +10,7 @@ import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews } from "@/services/image-storage";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
-import { RUNNING_HUB_WORKFLOW_PORT_X, runningHubWorkflowContentScale, runningHubWorkflowPortY, type RunningHubWorkflowPortHead } from "./canvas-runninghub-workflow-ports";
+import { runningHubWorkflowContentScale, runningHubWorkflowPortX, runningHubWorkflowPortY, type RunningHubWorkflowPortHead } from "./canvas-runninghub-workflow-ports";
 import { CanvasNodeType, type CanvasNodeData, type CanvasNodeImage, type CanvasNodeText, type CanvasStoryboardRow, type Position } from "@/types/canvas";
 import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -187,7 +187,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const transparentBg = Boolean(definition?.transparentBackground);
     const isActive = isConnectionTarget || isSelected || isFocusRelated;
     const displayHeight = data.height;
-    const imageBorderColor = isActive ? selectionBlue : isRelated ? theme.node.muted : "transparent";
+    const imageBorderColor = isSelected ? "transparent" : isActive ? selectionBlue : isRelated ? theme.node.muted : "transparent";
     const groupContainerBackground = theme.node.fill;
     const groupBorderColor = isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke;
     const groupBorderWidth = isGroupDropTarget || isActive ? 2 : 1;
@@ -328,7 +328,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             startTop: data.position.y,
             startWidth: data.width,
             startHeight: data.height,
-            keepRatio: hasDedicatedInputPorts || (data.type === CanvasNodeType.Image && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video || Boolean(definition?.keepAspectRatio?.(data)),
+            keepRatio: hasDedicatedInputPorts || data.type === CanvasNodeType.Image || data.type === CanvasNodeType.Video || Boolean(definition?.keepAspectRatio?.(data)),
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
         };
         window.addEventListener("mousemove", handleResizeMove);
@@ -374,7 +374,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                     className="absolute z-[80]"
                     style={{
                         left: 8,
-                        top: data.type === CanvasNodeType.Image ? -18 : -26,
+                        top: data.type === CanvasNodeType.Image ? undefined : -26,
+                        bottom: data.type === CanvasNodeType.Image ? `calc(100% + ${2 / Math.max(scale, 0.1)}px)` : undefined,
                         width: contentScale === 1 ? Math.max(24, data.width - 16) : `calc((100% - 16px) / ${contentScale})`,
                         maxWidth: "calc(100vw - 16px)",
                         transform: contentScale === 1 ? undefined : `scale(${contentScale})`,
@@ -388,7 +389,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                             ref={titleInputRef}
                             value={titleDraft}
                             maxLength={64}
-                            className="h-7 max-w-full border-0 border-b border-dashed bg-transparent px-0 text-left text-lg font-semibold outline-none"
+                            className={`max-w-full border-0 border-b border-dashed bg-transparent px-0 text-left text-lg font-semibold outline-none ${data.type === CanvasNodeType.Image ? "h-6 leading-tight" : "h-7"}`}
                             style={{ borderColor: theme.node.muted, color: theme.node.text }}
                             onChange={(event) => setTitleDraft(event.target.value)}
                             onBlur={finishTitleEditing}
@@ -401,11 +402,11 @@ export const CanvasNode = React.memo(function CanvasNode({
                             }}
                         />
                     ) : (
-                        <div data-canvas-image-info className="flex w-full min-w-0 items-center gap-1.5 text-lg font-semibold opacity-75">
+                        <div data-canvas-image-info className={`flex w-full min-w-0 items-center gap-1.5 text-lg font-semibold opacity-75 ${data.type === CanvasNodeType.Image ? "leading-tight" : ""}`}>
                             {data.type === CanvasNodeType.Image ? <ImageIcon className="size-3.5 shrink-0" /> : null}
                             <button
                                 type="button"
-                                className="block min-w-0 flex-1 truncate overflow-hidden border-b border-dashed border-transparent px-0 py-0.5 text-left transition hover:border-current hover:opacity-100"
+                                className={`block min-w-0 flex-1 truncate overflow-hidden border-b border-dashed border-transparent px-0 text-left transition hover:border-current hover:opacity-100 ${data.type === CanvasNodeType.Image ? "py-0 leading-tight" : "py-0.5"}`}
                                 style={{ color: theme.node.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                                 title={t("canvas.node.renameHint")}
                                 onDoubleClick={(event) => {
@@ -415,14 +416,14 @@ export const CanvasNode = React.memo(function CanvasNode({
                             >
                                 {data.title || t("canvas.node.untitled")}
                             </button>
-                            {data.type === CanvasNodeType.Image && showProfessionalImageInfo && imageResolution ? <span data-canvas-image-resolution className="shrink-0 whitespace-nowrap text-sm opacity-70">{imageResolution}</span> : null}
+                            {data.type === CanvasNodeType.Image && showProfessionalImageInfo && imageResolution ? <span data-canvas-image-resolution className="shrink-0 whitespace-nowrap text-sm leading-tight opacity-70">{imageResolution}</span> : null}
                         </div>
                     )}
                 </div>
             )}
 
             <div
-                className="relative h-full w-full overflow-visible rounded-xl border"
+                className={`relative h-full w-full overflow-visible border ${hasImageContent ? "rounded-3xl" : "rounded-xl"}`}
                 style={{
                     background: isGroup ? groupContainerBackground : hasImageContent || hasVideoContent || transparentBg ? "transparent" : theme.node.fill,
                     borderColor: isGroup
@@ -446,11 +447,13 @@ export const CanvasNode = React.memo(function CanvasNode({
                             : undefined
                         : isGroupDropTarget
                           ? `0 0 0 2px ${selectionBlue}66, inset 0 0 0 999px ${selectionBlue}10`
-                          : isActive
-                            ? `0 0 0 1px ${selectionBlue}55`
-                            : isRelated
-                              ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)`
-                              : undefined,
+                          : hasImageContent && isSelected
+                            ? undefined
+                            : isActive
+                              ? `0 0 0 1px ${selectionBlue}55`
+                              : isRelated
+                                ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)`
+                                : undefined,
                 }}
                 onMouseDown={(event) => {
                     if (!referenceSelectionState) onMouseDown(event, data.id);
@@ -479,7 +482,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }}
             >
                 <div
-                    className={`relative h-full w-full rounded-[inherit] ${isBatchRoot || hasDedicatedInputPorts ? "overflow-visible" : "overflow-hidden"}`}
+                    className={`relative h-full w-full ${hasImageContent ? "rounded-[calc(1.5rem-1px)]" : "rounded-[inherit]"} ${isBatchRoot || hasDedicatedInputPorts ? "overflow-visible" : "overflow-hidden"}`}
                     style={
                         {
                             background: isGroup ? "transparent" : hasImageContent || hasVideoContent || transparentBg ? "transparent" : theme.node.fill,
@@ -527,6 +530,10 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </div>
                 </div>
 
+                {hasImageContent && isSelected ? (
+                    <div className="pointer-events-none absolute inset-0 z-40 rounded-[calc(1.5rem-1px)] border-solid" style={{ borderColor: selectionBlue, borderWidth: 2 / Math.max(scale, 0.1) }} />
+                ) : null}
+
                 {!isGroup && !hasImageContent && !hasVideoContent && !hasAudioContent ? (
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12" style={{ background: `linear-gradient(to top, ${theme.canvas.background}66, transparent)` }} />
                 ) : null}
@@ -550,7 +557,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 {!referenceSelectionState ? <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} /> : null}
                 {!referenceSelectionState ? <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} /> : null}
                 {!referenceSelectionState ? <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} showIndicator={isSelected && data.type === CanvasNodeType.Image} scale={scale} indicatorColor={theme.node.text} /> : null}
             </div>
 
             {!referenceSelectionState && hasDedicatedInputPorts && !runningHubWorkflowPortsOpen ? <RunningHubWorkflowConnectionHeads heads={runningHubPortHeads} scale={scale} workflowScale={contentScale} visible={hovered} onMouseDown={(event, portId) => onConnectStart(event, data.id, "target", portId)} /> : null}
@@ -558,7 +565,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             {!referenceSelectionState && (definition?.hasSourceHandle ?? true) && data.type !== CanvasNodeType.Config ? <ConnectionHandleDot side="right" scale={scale} visible={hovered} onMouseDown={(event) => onConnectStart(event, data.id, "source")} /> : null}
 
             {showPanel && !isGroup && !hasDedicatedInputPorts && !data.metadata?.storyboardMode && renderPanel ? (
-                <div className="absolute left-1/2 top-full z-[70]" style={{ marginLeft: -creativeFrameWidth / 2 * promptPanelScale, paddingTop: 16 }}>
+                <div className="absolute left-1/2 top-full z-[70]" style={{ marginLeft: -creativeFrameWidth / 2 * promptPanelScale, paddingTop: hasImageContent ? 24 : 16 }}>
                     <div style={{ width: creativeFrameWidth, transform: `scale(${promptPanelScale})`, transformOrigin: "top left" }}>{renderPanel(data)}</div>
                 </div>
             ) : null}
@@ -1028,14 +1035,14 @@ function ImageContent({
                           />
                       ))
                 : null}
-            <div className="group/image relative h-full w-full overflow-hidden rounded-3xl">
+            <div className="group/image relative h-full w-full overflow-hidden rounded-[calc(1.5rem-1px)]">
                 {primaryContent ? (
                     <img
                         src={primarySource}
                         alt={node.title}
                         draggable={false}
                         onDragStart={(event) => event.preventDefault()}
-                        className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
+                        className="pointer-events-none block h-full w-full select-none object-contain"
                     />
                 ) : (
                     <ImageSlotStatus image={primaryImage} />
@@ -1257,7 +1264,7 @@ function BatchFrame({ batchCount, batchExpanded, children }: { batchCount: numbe
         </div>
     );
 }
-function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDown: (event: React.MouseEvent, corner: ResizeCorner) => void }) {
+function ResizeHandle({ corner, onMouseDown, showIndicator = false, scale = 1, indicatorColor }: { corner: ResizeCorner; onMouseDown: (event: React.MouseEvent, corner: ResizeCorner) => void; showIndicator?: boolean; scale?: number; indicatorColor?: string }) {
     const positionClass = {
         "top-left": "-left-[14px] -top-[14px] cursor-nwse-resize",
         "top-right": "-right-[14px] -top-[14px] cursor-nesw-resize",
@@ -1265,7 +1272,11 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
         "bottom-right": "-bottom-[14px] -right-[14px] cursor-nwse-resize",
     }[corner];
 
-    return <div className={`absolute z-50 size-7 ${positionClass}`} onMouseDown={(event) => onMouseDown(event, corner)} />;
+    return (
+        <div className={`absolute z-50 size-7 ${positionClass}`} style={showIndicator ? { transform: `scale(${1 / Math.max(scale, 0.1)})` } : undefined} onMouseDown={(event) => onMouseDown(event, corner)}>
+            {showIndicator ? <span aria-hidden="true" className="pointer-events-none absolute bottom-1 right-1 size-3 rounded-br-[10px] border-b-2 border-r-2" style={{ borderColor: indicatorColor }} /> : null}
+        </div>
+    );
 }
 
 type ConnectionMarker = { x: number; y: number; active: boolean };
@@ -1287,13 +1298,13 @@ function connectionMarkerFromEvent(event: React.MouseEvent<HTMLElement>, hitWidt
 
 function ConnectionHandleDot({ side, scale, visible, onMouseDown }: { side: "left" | "right"; scale: number; visible: boolean; onMouseDown: (event: React.MouseEvent) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    // 保留 84px 的屏幕感应区；连接点默认位于卡片外侧，进入后会即时吸附到鼠标位置。
+    // 保留 64px 的屏幕感应区；连接点默认贴近卡片，进入后会即时吸附到鼠标位置。
     const screenScale = Math.max(scale, 0.1);
     const markerSize = 20 / screenScale;
     const markerBorder = 1.5 / screenScale;
     const markerIcon = 11 / screenScale;
-    const hitSize = 84 / screenScale;
-    const magneticOffset = 20 / screenScale;
+    const hitSize = 64 / screenScale;
+    const magneticOffset = 8 / screenScale;
     const sideOffset = `-${hitSize / 2 + magneticOffset}px`;
     const [marker, setMarker] = useState<ConnectionMarker>({ x: 0, y: 0, active: false });
     const moveMarker = (event: React.MouseEvent<HTMLDivElement>) => setMarker(connectionMarkerFromEvent(event, hitSize, hitSize, true));
@@ -1357,12 +1368,10 @@ function RunningHubWorkflowConnectionHead({ head, scale, workflowScale, visible,
     const color = head.kind === "prompt" ? "#b78cff" : head.kind === "image" ? "#f2ad45" : head.kind === "video" ? "#46c7ad" : "#7ea8ff";
     const Icon = head.kind === "prompt" ? FileText : head.kind === "image" ? ImageIcon : head.kind === "video" ? Video : Music2;
     const label = head.kind === "prompt" ? "提示词" : `${head.kind === "image" ? "图片" : head.kind === "video" ? "视频" : "音频"}${head.index + 1}`;
-    const [marker, setMarker] = useState<ConnectionMarker>({ x: 0, y: 0, active: false });
-    const moveMarker = (event: React.MouseEvent<HTMLDivElement>) => setMarker(connectionMarkerFromEvent(event, hitWidth, hitHeight));
-    const clearMarker = () => setMarker({ x: 0, y: 0, active: false });
+    const [active, setActive] = useState(false);
 
-    return <div data-canvas-connection-zone="runninghub-summary" data-rh-port={head.portId} data-rh-port-kind={head.kind} className="absolute z-30 flex cursor-crosshair items-center justify-center pointer-events-auto" style={{ width: hitWidth, height: hitHeight, left: RUNNING_HUB_WORKFLOW_PORT_X * workflowScale - hitWidth / 2, top: portY * workflowScale - hitHeight / 2 }} onMouseMove={moveMarker} onMouseLeave={clearMarker}>
-        <button type="button" aria-label={`连接${label}端口`} title={head.connected ? `${label} 已接入` : `连接${label}`} data-rh-port={head.portId} data-rh-port-kind={head.kind} tabIndex={visible || marker.active ? 0 : -1} className={`relative flex items-center justify-center rounded-full transition-opacity duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${visible || marker.active ? "opacity-100" : "opacity-0"}`} style={{ width: markerSize, height: markerSize, borderWidth: markerBorder, background: head.connected ? `${color}2d` : theme.node.panel, borderColor: head.connected ? color : theme.node.activeStroke, borderStyle: "solid", boxShadow: `0 0 ${3 / screenScale}px ${head.connected ? `${color}88` : `${theme.node.activeStroke}66`}`, transform: `translate(${marker.x}px, ${marker.y}px)` }} onMouseDown={(event) => { if (event.button === 0) onMouseDown(event, head.portId); }} onClick={(event) => event.stopPropagation()}>
+    return <div data-canvas-connection-zone="runninghub-summary" data-rh-port={head.portId} data-rh-port-kind={head.kind} title={head.connected ? `${label} 已接入` : `连接${label}`} className="absolute z-30 flex cursor-crosshair items-center justify-center pointer-events-auto" style={{ width: hitWidth, height: hitHeight, left: runningHubWorkflowPortX(scale) - hitWidth / 2, top: portY * workflowScale - hitHeight / 2 }} onMouseEnter={() => setActive(true)} onMouseLeave={() => setActive(false)} onMouseDown={(event) => { if (event.button === 0) onMouseDown(event, head.portId); }}>
+        <button type="button" aria-label={`连接${label}端口`} data-rh-port={head.portId} data-rh-port-kind={head.kind} tabIndex={visible || active ? 0 : -1} className={`relative flex items-center justify-center rounded-full transition-opacity duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${visible || active ? "opacity-100" : "opacity-0"}`} style={{ width: markerSize, height: markerSize, borderWidth: markerBorder, background: head.connected ? `${color}2d` : theme.node.panel, borderColor: head.connected ? color : theme.node.activeStroke, borderStyle: "solid", boxShadow: `0 0 ${3 / screenScale}px ${head.connected ? `${color}88` : `${theme.node.activeStroke}66`}` }} onClick={(event) => event.stopPropagation()}>
             {head.connected ? <Icon style={{ width: markerIcon, height: markerIcon, strokeWidth: 2.5, color }} /> : <Plus style={{ width: markerIcon, height: markerIcon, strokeWidth: 2.5, color: theme.node.activeStroke }} />}
             {head.connected && head.kind !== "prompt" ? <span className="absolute -right-1.5 -top-1 grid min-w-2.5 size-2.5 place-items-center rounded-full px-px text-[7px] leading-none" style={{ background: color, color: "#171717" }}>{head.index + 1}</span> : null}
         </button>

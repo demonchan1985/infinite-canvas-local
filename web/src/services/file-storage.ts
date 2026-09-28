@@ -5,6 +5,7 @@ export type UploadedFile = { url: string; storageKey: string; bytes: number; mim
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
 const objectUrls = new Map<string, string>();
+const pendingUrls = new Map<string, Promise<string | undefined>>();
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
@@ -20,11 +21,25 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    return url;
+    let pending = pendingUrls.get(storageKey);
+    if (!pending) {
+        const request: Promise<string | undefined> = store.getItem<Blob>(storageKey)
+            .then((blob) => {
+                const current = objectUrls.get(storageKey);
+                // 删除或替换会使旧读取失效，避免重新缓存旧资源。
+                if (current || pendingUrls.get(storageKey) !== request) return current;
+                if (!blob) return undefined;
+                const url = URL.createObjectURL(blob);
+                objectUrls.set(storageKey, url);
+                return url;
+            })
+            .finally(() => {
+                if (pendingUrls.get(storageKey) === request) pendingUrls.delete(storageKey);
+            });
+        pendingUrls.set(storageKey, request);
+        pending = request;
+    }
+    return (await pending) || fallback;
 }
 
 export async function getMediaBlob(storageKey: string) {
@@ -33,6 +48,9 @@ export async function getMediaBlob(storageKey: string) {
 
 export async function setMediaBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
+    pendingUrls.delete(storageKey);
+    const previous = objectUrls.get(storageKey);
+    if (previous) URL.revokeObjectURL(previous);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -41,10 +59,11 @@ export async function setMediaBlob(storageKey: string, blob: Blob) {
 export async function deleteStoredMedia(keys: Iterable<string>) {
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
+            await store.removeItem(key);
+            pendingUrls.delete(key);
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
-            await store.removeItem(key);
         }),
     );
 }
@@ -55,7 +74,7 @@ export async function cleanupUnusedMedia(usedData: unknown) {
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);
     });
-    await Promise.all(unused.map((key) => store.removeItem(key)));
+    await deleteStoredMedia(unused);
 }
 
 export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()) {

@@ -43,6 +43,19 @@ export type AgentSkillsResponse = { ok?: boolean; data?: AgentSkillSummary[]; er
 export type AgentSkillResponse = { ok?: boolean; data?: AgentSkillDetail };
 export type AgentSkillDraftResponse = { ok?: boolean; data?: AgentSkillDraft };
 export type AgentSkillContentResponse = { ok?: boolean; data?: AgentSkillContent };
+export type LocalUpdateStatus = { phase: "idle" | "stopping" | "fetching" | "installing" | "restarting" | "done" | "failed"; error?: string; updatedAt?: number };
+
+export function checkLocalUpdate(endpoint: string, token: string) {
+    return fetchAgentJson<{ ok: boolean; error?: string }>(endpoint, token, "/agent/local-update/check");
+}
+
+export function startLocalUpdate(endpoint: string, token: string) {
+    return fetchAgentJson<{ ok: boolean }>(endpoint, token, "/agent/local-update", { method: "POST" });
+}
+
+export function fetchLocalUpdateStatus(endpoint: string, token: string) {
+    return fetchAgentJson<LocalUpdateStatus>(endpoint, token, "/agent/local-update/status");
+}
 
 export async function postState(endpoint: string, token: string, clientId: string, snapshot: CanvasAgentSnapshot | null) {
     try {

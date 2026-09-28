@@ -64,10 +64,16 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
 }
 
 /** Raw request with no automatic auth header — the script controls method, url, headers, body entirely. */
-function createPluginRequest(config: AiConfig, options?: RequestOptions) {
+function createPluginRequest(config: AiConfig, options?: RequestOptions, capture?: (request: AxiosRequestConfig, data: unknown, status?: number) => void) {
     return async (requestConfig: AxiosRequestConfig & { url: string }) => {
-        const response = await axios.request({ ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
-        return response.data;
+        try {
+            const response = await axios.request({ ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
+            capture?.(requestConfig, response.data, response.status);
+            return response.data;
+        } catch (error) {
+            if (axios.isAxiosError(error)) capture?.(requestConfig, error.response?.data, error.response?.status);
+            throw error;
+        }
     };
 }
 
@@ -114,7 +120,24 @@ function createPoll(signal?: AbortSignal) {
 export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<T> {
     const { config } = args;
     const http = createPluginHttp(config, { signal: args.signal });
-    const request = createPluginRequest(config, { signal: args.signal });
+    let diagnostics: Record<string, unknown> | undefined;
+    const request = createPluginRequest(config, { signal: args.signal }, (requestConfig, value, httpStatus) => {
+        if (config.apiFormat !== "runninghub") return;
+        const action = requestConfig.url?.match(/\/api\/runninghub\/(task|query|upload)(?:$|\?)/)?.[1];
+        if (!action) return;
+        const response = value as Record<string, unknown> | undefined;
+        const body = (response?.data || response || {}) as Record<string, unknown>;
+        const failureReason = body.failedReason || response?.failedReason;
+        let failure = failureReason;
+        if (typeof failure === "string") { try { failure = JSON.parse(failure); } catch { failure = undefined; } }
+        const node = failure as Record<string, unknown> | undefined;
+        const input = requestConfig.data as { taskId?: string; target?: string } | undefined;
+        diagnostics = { ...diagnostics, stage: action === "task" ? "提交任务" : action === "upload" ? "上传素材" : "查询任务", httpStatus,
+            taskId: body.taskId || input?.taskId || diagnostics?.taskId, workflowId: input?.target || diagnostics?.workflowId,
+            status: body.status || (httpStatus && httpStatus >= 400 ? "HTTP_ERROR" : undefined), errorCode: body.errorCode || body.code,
+            nodeId: node?.node_id, nodeType: node?.node_type, exceptionType: node?.exception_type, exceptionMessage: node?.exception_message || (typeof failureReason === "string" ? failureReason : undefined),
+        };
+    });
     const poll = createPoll(args.signal);
     const runner = new Function(
         "prompt",
@@ -156,7 +179,9 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         if (error instanceof DOMException && error.name === "AbortError") throw error;
         if (axios.isCancel(error)) throw error;
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(i18n.t("modelPlugin.executionFailed", { message }));
+        const wrapped = new Error(i18n.t("modelPlugin.executionFailed", { message }), { cause: error });
+        if (diagnostics) Object.assign(wrapped, { diagnostics });
+        throw wrapped;
     }
 }
 

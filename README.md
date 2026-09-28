@@ -18,6 +18,8 @@ node scripts/start-local.mjs
 
 画布、素材和部分偏好保存在浏览器本地。Agent 的连接令牌与运行数据保存在 `canvas-agent/.runtime/`，该目录不会提交到 Git。
 
+Git 克隆用户可在画布“版本更新”中点击“从 Git 更新”：仅对干净的本仓库 `main` 分支执行快进更新，按需安装依赖并在后台重启；ZIP 下载目录暂不支持。更新后原启动终端不再控制新服务。已有旧版需先手动更新一次以获得该按钮。
+
 ## 项目来源与授权
 
 这是一个基于 [basketikun/infinite-canvas](https://github.com/basketikun/infinite-canvas) 独立发展的画布项目，不是 AIFISHER 的魔改版。风格、MJ 码图等相关功能是从 AIFISHER 移植并适配到本画布的部分功能；这不代表画布主体或其他独立功能来自 AIFISHER。

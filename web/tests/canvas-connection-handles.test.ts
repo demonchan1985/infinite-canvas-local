@@ -9,7 +9,7 @@ const globalStyles = readFileSync(new URL("../src/styles/globals.css", import.me
 test("连接点在低缩放时使用独立的固定屏幕感应区和可见视觉尺寸", () => {
     assert.match(source, /const screenScale = Math\.max\(scale, 0\.1\)/);
     assert.match(source, /const markerSize = 20 \/ screenScale/);
-    assert.match(source, /const hitSize = 84 \/ screenScale/);
+    assert.match(source, /const hitSize = 64 \/ screenScale/);
     assert.match(source, /sideOffset/);
 });
 
@@ -24,7 +24,7 @@ test("连接点靠近即可浮到鼠标下方开始拉线，而非要求命中�
 
 test("普通卡片的连接点从卡片外侧磁吸到靠近的鼠标位置", () => {
     assert.match(source, /const markerSize = 20 \/ screenScale/);
-    assert.match(source, /const magneticOffset = 20 \/ screenScale/);
+    assert.match(source, /const magneticOffset = 8 \/ screenScale/);
     assert.match(source, /const sideOffset = `-\$\{hitSize \/ 2 \+ magneticOffset\}px`/);
     assert.match(source, /transition: marker\.active \? "none" : "opacity 120ms ease-out, transform 120ms ease-out"/);
 });

@@ -26,7 +26,7 @@ test("节点标题仍随画布缩放，创作框使用可读性视觉比例", ()
 
 test("创作框以紧凑宽度显示，缩短空白输入区但不缩小预设命中区", () => {
     assert.match(nodeSource, /const creativeFrameWidth = 820;/);
-    assert.match(nodeSource, /marginLeft: -creativeFrameWidth \/ 2 \* promptPanelScale, paddingTop: 16/);
+    assert.match(nodeSource, /marginLeft: -creativeFrameWidth \/ 2 \* promptPanelScale, paddingTop: hasImageContent \? 24 : 16/);
     assert.match(nodeSource, /style=\{\{ width: creativeFrameWidth, transform: `scale\(\$\{promptPanelScale\}\)`/);
     assert.match(promptPanelSource, /rounded-\[24px\] border p-4/);
     assert.match(promptPanelSource, /h-36 w-full cursor-text/);
@@ -56,13 +56,13 @@ test("文本、配置和分组节点保持与自身外框相同的坐标系", ()
 });
 
 test("节点外部标题使用提升后的基础字号，避免在画布缩小后过小", () => {
-    assert.match(nodeSource, /data-canvas-image-info className="flex w-full min-w-0 items-center gap-1\.5 text-lg font-semibold opacity-75"/);
-    assert.match(nodeSource, /className="h-7 max-w-full border-0 border-b border-dashed bg-transparent px-0 text-left text-lg font-semibold outline-none"/);
+    assert.match(nodeSource, /data-canvas-image-info className=\{`flex w-full min-w-0 items-center gap-1\.5 text-lg font-semibold opacity-75/);
+    assert.match(nodeSource, /className=\{`max-w-full border-0 border-b border-dashed bg-transparent px-0 text-left text-lg font-semibold outline-none/);
 });
 
 test("拉伸 RH 卡片时，内容、端口与连线使用同一节点坐标系", () => {
     assert.match(nodeSource, /const contentScale = hasDedicatedInputPorts \? runningHubWorkflowContentScale\(data\) : isGroup \? groupContentScale : isGroupMember \? groupMemberContentScale : readableScale/);
-    assert.match(nodeSource, /keepRatio: hasDedicatedInputPorts \|\| \(data\.type === CanvasNodeType\.Image/);
+    assert.match(nodeSource, /keepRatio: hasDedicatedInputPorts \|\| data\.type === CanvasNodeType\.Image/);
     assert.match(projectSource, /const workflowScale = runningHubWorkflowContentScale\(node\);/);
     assert.match(projectSource, /width = RUNNING_HUB_WORKFLOW_NODE_WIDTH \* workflowScale/);
     assert.match(connectionSource, /runningHubWorkflowContentScale\(to\)/);

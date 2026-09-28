@@ -10,8 +10,12 @@ const WORKFLOW_ROW_HEIGHT = 40;
 const WORKFLOW_SUMMARY_PROMPT_Y = 94;
 const WORKFLOW_SUMMARY_MEDIA_START_Y = 144;
 const WORKFLOW_SUMMARY_PORT_GAP = 34;
-// RH 输入头位于节点左侧，连线不再穿入设置卡内部。
-export const RUNNING_HUB_WORKFLOW_PORT_X = -14;
+// RH 输入头按屏幕距离贴在卡片左侧，画布和卡片缩放均不改变边缘间距。
+export const RUNNING_HUB_WORKFLOW_PORT_X = -8;
+
+export function runningHubWorkflowPortX(scale: number) {
+    return RUNNING_HUB_WORKFLOW_PORT_X / Math.max(scale, 0.1);
+}
 
 /** RH 卡片拉伸时，内部内容和外侧素材端口使用同一个等比缩放系数。 */
 export function runningHubWorkflowContentScale(node: Pick<CanvasNodeData, "width">) {
@@ -73,23 +77,27 @@ export function runningHubWorkflowFirstAvailablePort(resource: RunningHubResourc
 }
 
 /** RH 节点外侧输入头：已接入的真实槽位保留为媒体图标，下一个空槽才显示加号。 */
-export function runningHubWorkflowPortHeads(resource: RunningHubResource, connections: CanvasConnection[], targetNodeId: string): RunningHubWorkflowPortHead[] {
+export function runningHubWorkflowPortHeads(resource: RunningHubResource, connections: CanvasConnection[], targetNodeId: string, cardHeight?: number): RunningHubWorkflowPortHead[] {
     const occupied = new Set(
         connections
             .filter((connection) => connection.toNodeId === targetNodeId && Boolean(connection.toPort))
             .map((connection) => runningHubWorkflowPortIdentity(connection.toPort) || connection.toPort!),
     );
-    return (["prompt", "image", "video", "audio"] as const).flatMap((kind) => {
+    const heads = (["prompt", "image", "video", "audio"] as const).flatMap((kind) => {
         const candidates = kind === "prompt"
             ? resource.promptBinding ? ["prompt:0"] : []
             : bindingsForPortKind(resource, kind).map((_, index) => runningHubWorkflowPortId(resource, kind, index)).filter((port): port is string => Boolean(port));
         const firstAvailable = candidates.find((port) => !occupied.has(runningHubWorkflowPortIdentity(port) || port));
         return candidates.flatMap((port, index) => {
             const connected = occupied.has(runningHubWorkflowPortIdentity(port) || port);
-            const summaryY = runningHubWorkflowPortY(port, false, resource);
-            return connected || port === firstAvailable ? summaryY === undefined ? [] : [{ kind, index, portId: port, connected, summaryY }] : [];
+            return connected || port === firstAvailable ? [{ kind, index, portId: port, connected, summaryY: 0 }] : [];
         });
     });
+    const mediaStartY = resource.promptBinding ? WORKFLOW_SUMMARY_MEDIA_START_Y : WORKFLOW_SUMMARY_PROMPT_Y;
+    const mediaCount = heads.filter((head) => head.kind !== "prompt").length;
+    const mediaGap = mediaCount > 1 ? Math.min(WORKFLOW_SUMMARY_PORT_GAP, (Math.max(mediaStartY, (cardHeight ?? Infinity) - 28) - mediaStartY) / (mediaCount - 1)) : WORKFLOW_SUMMARY_PORT_GAP;
+    let mediaIndex = 0;
+    return heads.map((head) => ({ ...head, summaryY: head.kind === "prompt" ? WORKFLOW_SUMMARY_PROMPT_Y : mediaStartY + mediaGap * mediaIndex++ }));
 }
 
 export function runningHubWorkflowAutoPort(resource: RunningHubResource, sourceType: CanvasNodeTypeId, connections: CanvasConnection[], targetNodeId: string) {
@@ -148,11 +156,16 @@ export function migrateUnambiguousRunningHubLegacyConnections(
     return migratedPorts.size ? connections.map((connection) => migratedPorts.has(connection.id) ? { ...connection, toPort: migratedPorts.get(connection.id) } : connection) : connections;
 }
 
-export function runningHubWorkflowPortY(portId?: string, expanded = true, resource?: RunningHubResource) {
+export function runningHubWorkflowPortY(portId?: string, expanded = true, resource?: RunningHubResource, heads?: RunningHubWorkflowPortHead[]) {
     // 完整格式：image:<index>:<order>:<nodeId>.<field>；旧格式缺少 order，
     // 因此不能把旧格式里的 nodeId 误读为 order。
     const match = portId?.match(/^(prompt|image|video|audio):(\d+)(?::(\d+):\d+\.)?/);
     if (!match) return undefined;
+    if (!expanded && heads) {
+        const identity = runningHubWorkflowPortIdentity(portId);
+        const head = heads.find((item) => runningHubWorkflowPortIdentity(item.portId) === identity);
+        if (head) return head.summaryY;
+    }
     if (match[1] === "prompt") return expanded ? WORKFLOW_HEADER_HEIGHT + WORKFLOW_ROW_HEIGHT / 2 : WORKFLOW_SUMMARY_PROMPT_Y;
 
     // 新端口保存全局 order。旧端口没有 order 时，根据已导入的真实绑定恢复它，

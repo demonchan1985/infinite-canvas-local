@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { RunningHubAccountBalance } from "@/components/layout/runninghub-account-balance";
+import { CanvasErrorLogButton } from "@/components/canvas/canvas-error-log";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -156,6 +157,7 @@ export function CanvasTopBar({
                     <Tooltip title="工作流节点库"><button type="button" aria-label="工作流节点库" onClick={onOpenWorkflowLibrary} className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Workflow className="size-4" /></button></Tooltip>
                     <Tooltip title="导入 RunningHub 工作流或 AI 应用"><button type="button" aria-label="导入 RunningHub 工作流或 AI 应用" onClick={onImportRunningHubWorkflow} className="grid size-8 place-items-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10"><Upload className="size-4" /></button></Tooltip>
                     <RunningHubAccountBalance />
+                    <CanvasErrorLogButton />
                     <span className="mx-1 h-4 w-px" style={{ background: theme.toolbar.border }} />
                     <button type="button" aria-label="Agent" aria-pressed={agentOpen} onClick={onToggleAgent} className="flex h-8 items-center gap-2 rounded-lg px-2 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10" style={agentOpen ? { background: theme.toolbar.activeBg } : undefined}><Bot className="size-4" /><span className="hidden @min-[600px]:inline">Agent</span></button>
                 </div>

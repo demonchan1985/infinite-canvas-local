@@ -224,7 +224,6 @@ export function CanvasTextNodeTags({ value, onChange, onOpenChange }: CanvasText
                     >
                         <span className="flex h-6 items-center gap-1 rounded-md px-1 transition" style={{ background: open ? theme.toolbar.activeBg : "transparent", color: open ? theme.toolbar.activeText : undefined }}>
                             <Tag className="size-4" />
-                            <span>{t("canvas.nodeToolbar.tags")}</span>
                             {tags.length ? (
                                 <span className="ml-0.5 rounded-full px-1 text-[10px] leading-4" style={{ background: theme.toolbar.activeBg }}>
                                     {tags.length}

@@ -1,9 +1,7 @@
 import type { RunningHubWorkflowField } from "@/stores/use-config-store";
 import type { RunningHubWorkflowRunOptions } from "@/types/canvas";
 
-export type RunningHubWorkflowFieldControl = "aspect-ratio" | "megapixels" | "duration" | "seed" | "second-pass" | "default";
-
-export const RUNNING_HUB_ASPECT_RATIO_OPTIONS = ["1:1 (Square)", "2:3 (Portrait Photo)", "3:2 (Photo)", "3:4 (Portrait Standard)", "4:3 (Standard)", "9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "21:9 (Ultrawide)"];
+export type RunningHubWorkflowFieldControl = "duration" | "seed" | "default";
 
 export const RUNNING_HUB_WORKFLOW_INSTANCE_TYPES = ["default", "plus", "ultra"] as const;
 export type RunningHubWorkflowInstanceType = (typeof RUNNING_HUB_WORKFLOW_INSTANCE_TYPES)[number];
@@ -66,19 +64,12 @@ export function toggleRunningHubWorkflowMaterialPort(current: string[], portId: 
 }
 
 export function runningHubWorkflowFieldControl(field: RunningHubWorkflowField): RunningHubWorkflowFieldControl {
-    if (field.fieldName === "aspect_ratio") return "aspect-ratio";
-    if (field.fieldName === "megapixels") return "megapixels";
-    if (field.fieldName === "noise_seed") return "seed";
-    if (/二采|倍数/i.test(field.label)) return "second-pass";
-    if (field.fieldName === "value" && /时长/i.test(field.label)) return "duration";
+    if (field.type !== "number") return "default";
+    if (/^(noise_seed|seed)$/.test(field.fieldName)) return "seed";
+    if (/时长/.test(field.label) && field.min !== undefined && field.max !== undefined) return "duration";
     return "default";
 }
 
 export function runningHubWorkflowNumberLimits(field: RunningHubWorkflowField) {
-    const control = runningHubWorkflowFieldControl(field);
-    if (control === "megapixels") return { min: 0.2, max: 2, step: 0.1 };
-    if (control === "duration") return { min: 2, max: 15, step: 1 };
-    if (control === "second-pass") return { min: 0, step: 0.1 };
-    if (control === "seed") return { min: 0, step: 1 };
     return { min: field.min, max: field.max, step: field.step };
 }

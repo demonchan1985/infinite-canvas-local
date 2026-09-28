@@ -6,6 +6,7 @@ import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
+import { refreshRunningHubWorkflowModel } from "@/lib/runninghub-model";
 import { fitGptImage2Size, GPT_IMAGE_2_MAX_EDGE, GPT_IMAGE_2_MAX_PIXELS, GPT_IMAGE_2_MAX_RATIO, imageSizeForResolution, inferImageResolution, normalizeImageResolution } from "@/lib/media-size";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
@@ -836,7 +837,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed")), { cause: error });
         }
     }
     if (requestConfig.apiFormat === "gemini") {
@@ -898,7 +899,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             });
             return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed")), { cause: error });
         }
     }
     if (requestConfig.apiFormat === "gemini") {
@@ -964,7 +965,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
             if (text === apiText("noContent")) onDelta(text);
             return text;
         } catch (error) {
-            throw new Error(readAxiosError(error, apiText("requestFailed")));
+            throw new Error(readAxiosError(error, apiText("requestFailed")), { cause: error });
         }
     }
     try {
@@ -1037,7 +1038,7 @@ export async function fetchChannelModels(channel: ModelChannel) {
             const response = await fetch("/api/runninghub/models", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ apiKey: channel.apiKey }),
+                body: JSON.stringify({ apiKey: channel.apiKey, baseUrl: channel.baseUrl }),
             });
             const payload = (await response.json().catch(() => ({}))) as { data?: Array<{ id?: string; model?: string; name?: string } | string>; models?: Array<{ id?: string; model?: string; name?: string } | string>; error?: string };
             if (!response.ok) throw new Error(payload.error || apiText("modelReadFailed"));
@@ -1062,7 +1063,7 @@ export async function fetchRunningHubCatalog(channel: ModelChannel) {
         const response = await fetch("/api/runninghub/catalog", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ apiKey: channel.apiKey }),
+            body: JSON.stringify({ apiKey: channel.apiKey, baseUrl: channel.baseUrl }),
         });
         const payload = (await response.json().catch(() => ({}))) as { data?: RunningHubCatalogModel[]; error?: string };
         if (!response.ok) throw new Error(payload.error || "无法读取 RunningHub 标准模型目录");
@@ -1073,12 +1074,13 @@ export async function fetchRunningHubCatalog(channel: ModelChannel) {
 }
 
 /** 读取 AI 应用 / 工作流的公开参数结构；调用使用消费级 Key，但不会创建任务。 */
-export async function fetchRunningHubWorkflowInfo(channel: ModelChannel, workflowId: string) {
+export async function fetchRunningHubWorkflowInfo(channel: Pick<ModelChannel, "consumerApiKey" | "baseUrl">, workflowId: string, signal?: AbortSignal) {
     try {
         const response = await fetch("/api/runninghub/workflow-info", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ apiKey: channel.consumerApiKey, id: workflowId }),
+            body: JSON.stringify({ apiKey: channel.consumerApiKey, baseUrl: channel.baseUrl, id: workflowId }),
+            signal,
         });
         const payload = (await response.json().catch(() => ({}))) as { data?: unknown; error?: string; message?: string; msg?: string };
         if (!response.ok || (typeof payload === "object" && payload && "code" in payload && (payload as { code?: number }).code !== 0)) throw new Error(payload.error || payload.message || payload.msg || "无法读取 RunningHub 工作流参数");
@@ -1088,13 +1090,31 @@ export async function fetchRunningHubWorkflowInfo(channel: ModelChannel, workflo
     }
 }
 
+/** 旧卡片先只读核对 API 格式；只更新本次运行配置，不覆盖用户保存的渠道与参数。 */
+export async function prepareRunningHubWorkflowConfig(config: AiConfig, signal?: AbortSignal): Promise<AiConfig> {
+    const selected = findChannelModel(config, config.model);
+    const resource = selected?.model.runningHub;
+    if (!selected || resource?.kind !== "workflow" || Array.isArray(resource.apiFieldKeys)) return config;
+    try {
+        const payload = await fetchRunningHubWorkflowInfo(selected.channel, resource.target, signal);
+        const model = refreshRunningHubWorkflowModel(selected.model, payload);
+        if (!Array.isArray(model.runningHub?.apiFieldKeys)) throw new Error("RunningHub 未返回可核对的 API 字段");
+        return { ...config, channels: config.channels.map((channel) => channel.id === selected.channel.id ? { ...channel, models: channel.models.map((item) => item.name === selected.model.name ? model : item) } : channel) };
+    } catch (cause) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        const error = new Error("RunningHub 核对映射失败：" + (cause instanceof Error ? cause.message : String(cause)), { cause });
+        Object.assign(error, { diagnostics: { stage: "核对映射", workflowId: resource.target, status: "NOT_SUBMITTED" } });
+        throw error;
+    }
+}
+
 /** 读取 RunningHub 工作流公开页面标题，不创建任务，也不需要消费级 Key。 */
-export async function fetchRunningHubWorkflowTitle(workflowId: string) {
+export async function fetchRunningHubWorkflowTitle(workflowId: string, baseUrl?: string) {
     try {
         const response = await fetch("/api/runninghub/workflow-title", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ id: workflowId }),
+            body: JSON.stringify({ id: workflowId, baseUrl }),
         });
         const payload = (await response.json().catch(() => ({}))) as { title?: string; error?: string; message?: string };
         if (!response.ok || !payload.title?.trim()) throw new Error(payload.error || payload.message || "无法读取 RunningHub 工作流标题");
@@ -1110,7 +1130,7 @@ export async function fetchRunningHubAiAppInfo(channel: ModelChannel, appId: str
         const response = await fetch("/api/runninghub/app-info", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ apiKey: channel.consumerApiKey, id: appId }),
+            body: JSON.stringify({ apiKey: channel.consumerApiKey, baseUrl: channel.baseUrl, id: appId }),
         });
         const payload = (await response.json().catch(() => ({}))) as { data?: unknown; error?: string; message?: string; msg?: string; code?: number };
         if (!response.ok || payload.code !== undefined && payload.code !== 0) throw new Error(payload.error || payload.message || payload.msg || "无法读取 RunningHub AI 应用参数");

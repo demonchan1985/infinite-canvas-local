@@ -11,6 +11,7 @@ import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import { listCodexModels } from "../canvas-agent/src/agent/codex";
 import { parseChangelog } from "./src/lib/release";
 import { runningHubCoverSourceFromHtml, type RunningHubCoverKind } from "./src/lib/runninghub-cover";
+import { RUNNINGHUB_SITES, runningHubApiBaseUrl, runningHubSiteFromBaseUrl } from "./src/lib/runninghub-site";
 
 const webDir = dirname(fileURLToPath(import.meta.url));
 const localVersion = readFileSync(resolve(webDir, "../VERSION"), "utf8").trim() || "dev";
@@ -47,10 +48,12 @@ function localPluginsManifest(): Plugin {
 type CodexImageAttachment = { name?: string; type?: string; dataUrl?: string };
 type CodexImageRequest = { model?: string; prompt?: string; attachments?: CodexImageAttachment[]; size?: string; quality?: string };
 type CodexTextRequest = { prompt?: string; model?: string; attachments?: CodexImageAttachment[] };
-type RunningHubModelsRequest = { apiKey?: string };
-type RunningHubAccountStatusRequest = { apiKey?: string };
+type RunningHubRequest = { apiKey?: string; baseUrl?: string };
+type RunningHubModelsRequest = RunningHubRequest;
+type RunningHubAccountStatusRequest = RunningHubRequest;
 type RunningHubTaskRequest = {
     apiKey?: string;
+    baseUrl?: string;
     kind?: "standard" | "app" | "workflow";
     target?: string;
     body?: Record<string, unknown>;
@@ -61,11 +64,11 @@ type RunningHubTaskRequest = {
     retainSeconds?: number;
     webhookUrl?: string;
 };
-type RunningHubQueryRequest = { apiKey?: string; taskId?: string; keyType?: "enterprise" | "consumer" };
-type RunningHubInfoRequest = { apiKey?: string; id?: string };
-type RunningHubTitleRequest = { id?: string };
-type RunningHubUploadRequest = { apiKey?: string; dataUrl?: string; fileName?: string };
-type RunningHubCatalogRequest = { apiKey?: string };
+type RunningHubQueryRequest = RunningHubRequest & { taskId?: string; keyType?: "enterprise" | "consumer" };
+type RunningHubInfoRequest = RunningHubRequest & { id?: string };
+type RunningHubTitleRequest = { id?: string; baseUrl?: string };
+type RunningHubUploadRequest = RunningHubRequest & { dataUrl?: string; fileName?: string };
+type RunningHubCatalogRequest = RunningHubRequest;
 type RunningHubCatalogItem = { name: string; capability: "image" | "video" | "audio"; target: string };
 const CODEX_IMAGE_TIMEOUT_MS = 3 * 60 * 1000;
 const MAX_IMAGEGEN_BODY_BYTES = 32 * 1024 * 1024;
@@ -99,7 +102,8 @@ function directCodexImagegen(): Plugin {
                 const body = (await readJsonBody(req)) as RunningHubModelsRequest;
                 const apiKey = String(body.apiKey || "").trim();
                 if (!apiKey) throw new Error("请填写 RunningHub 企业级-共享 API Key");
-                const response = await fetch("https://llm.runninghub.cn/v1/models", { headers: { Authorization: `Bearer ${apiKey}` } });
+                const baseUrl = runningHubApiBaseUrl(body.baseUrl);
+                const response = await fetch(`${RUNNINGHUB_SITES[runningHubSiteFromBaseUrl(baseUrl)].llmBaseUrl}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
                 const payload = await response.text();
                 res.statusCode = response.status;
                 res.setHeader("Content-Type", response.headers.get("content-type") || "application/json");
@@ -116,7 +120,7 @@ function directCodexImagegen(): Plugin {
                 const body = (await readJsonBody(req)) as RunningHubCatalogRequest;
                 runningHubApiKey(body.apiKey);
                 res.setHeader("Content-Type", "application/json");
-                res.end(JSON.stringify({ data: await runningHubModelCatalog() }));
+                res.end(JSON.stringify({ data: await runningHubModelCatalog(runningHubApiBaseUrl(body.baseUrl)) }));
             } catch (error) {
                 runningHubError(res, error);
             }
@@ -127,7 +131,7 @@ function directCodexImagegen(): Plugin {
                 const body = (await readJsonBody(req)) as RunningHubAccountStatusRequest;
                 const apiKey = String(body.apiKey || "").trim();
                 if (!apiKey) throw new Error("请先绑定 RunningHub API Key");
-                const response = await fetch("https://www.runninghub.cn/uc/openapi/accountStatus", {
+                const response = await fetch(`${runningHubApiBaseUrl(body.baseUrl)}/uc/openapi/accountStatus`, {
                     method: "POST",
                     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                     body: JSON.stringify({ apikey: apiKey }),
@@ -143,10 +147,13 @@ function directCodexImagegen(): Plugin {
                 const request = new URL(req.url || "", "http://127.0.0.1");
                 const kind = request.searchParams.get("kind");
                 const id = request.searchParams.get("id");
+                const site = request.searchParams.get("site") || "cn";
+                if (site !== "cn" && site !== "ai") throw new Error("RunningHub 站点无效");
+                const baseUrl = RUNNINGHUB_SITES[site].baseUrl;
                 if (kind !== "app" && kind !== "workflow") throw new Error("RunningHub 封面类型无效");
                 const target = runningHubNumericId(id, kind === "app" ? "AI 应用 ID" : "工作流 ID");
-                const cached = await readRunningHubCover(kind, target);
-                const cover = cached || (await downloadRunningHubCover(kind, target));
+                const cached = await readRunningHubCover(kind, target, site);
+                const cover = cached || (await downloadRunningHubCover(kind, target, baseUrl));
                 if (!cover) {
                     res.statusCode = 404;
                     // 避免浏览器把「暂时取不到封面」的 404 长期缓存住，修复后无需清缓存。
@@ -154,7 +161,7 @@ function directCodexImagegen(): Plugin {
                     res.end("RunningHub 未提供可下载的项目封面");
                     return;
                 }
-                if (!cached) await writeRunningHubCover(kind, target, cover);
+                if (!cached) await writeRunningHubCover(kind, target, site, cover);
                 // 封面可能因为解析规则修正而变化，所以用 ETag 每次校验，避免浏览器长期缓存旧图。
                 const etag = `"${createHash("sha1").update(cover.data).digest("hex").slice(0, 16)}"`;
                 res.setHeader("ETag", etag);
@@ -179,7 +186,7 @@ function directCodexImagegen(): Plugin {
                 const apiKey = runningHubApiKey(body.apiKey, kind === "app" || kind === "workflow" ? "consumer" : "enterprise");
                 const target = String(body.target || "").trim();
                 if (!kind || !target) throw new Error("请提供 RunningHub 资源类型和资源 ID");
-                const url = runningHubTaskUrl(kind, target);
+                const url = runningHubTaskUrl(kind, target, runningHubApiBaseUrl(body.baseUrl));
                 const payload =
                     kind === "standard"
                         ? body.body || {}
@@ -203,7 +210,7 @@ function directCodexImagegen(): Plugin {
                 const apiKey = runningHubApiKey(body.apiKey, body.keyType === "consumer" ? "consumer" : "enterprise");
                 const taskId = String(body.taskId || "").trim();
                 if (!taskId) throw new Error("缺少 RunningHub taskId");
-                const response = await fetch("https://www.runninghub.cn/openapi/v2/query", {
+                const response = await fetch(`${runningHubApiBaseUrl(body.baseUrl)}/openapi/v2/query`, {
                     method: "POST",
                     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                     body: JSON.stringify({ taskId }),
@@ -219,7 +226,7 @@ function directCodexImagegen(): Plugin {
                 const body = (await readJsonBody(req)) as RunningHubInfoRequest;
                 const apiKey = runningHubApiKey(body.apiKey, "consumer");
                 const webappId = runningHubNumericId(body.id, "AI 应用 ID");
-                const response = await fetch(`https://www.runninghub.cn/api/webapp/apiCallDemo?apiKey=${encodeURIComponent(apiKey)}&webappId=${encodeURIComponent(webappId)}`, {
+                const response = await fetch(`${runningHubApiBaseUrl(body.baseUrl)}/api/webapp/apiCallDemo?apiKey=${encodeURIComponent(apiKey)}&webappId=${encodeURIComponent(webappId)}`, {
                     headers: { Authorization: `Bearer ${apiKey}` },
                 });
                 await forwardRunningHubResponse(response, res);
@@ -233,7 +240,7 @@ function directCodexImagegen(): Plugin {
                 const body = (await readJsonBody(req)) as RunningHubInfoRequest;
                 const apiKey = runningHubApiKey(body.apiKey, "consumer");
                 const workflowId = runningHubNumericId(body.id, "工作流 ID");
-                const response = await fetch("https://www.runninghub.cn/api/openapi/getJsonApiFormat", {
+                const response = await fetch(`${runningHubApiBaseUrl(body.baseUrl)}/api/openapi/getJsonApiFormat`, {
                     method: "POST",
                     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
                     body: JSON.stringify({ apiKey, workflowId }),
@@ -248,7 +255,7 @@ function directCodexImagegen(): Plugin {
             try {
                 const body = (await readJsonBody(req)) as RunningHubTitleRequest;
                 const workflowId = runningHubNumericId(body.id, "工作流 ID");
-                const response = await fetch(`https://www.runninghub.cn/post/${encodeURIComponent(workflowId)}`, { headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" } });
+                const response = await fetch(`${runningHubApiBaseUrl(body.baseUrl)}/post/${encodeURIComponent(workflowId)}`, { headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" } });
                 if (!response.ok) throw new Error("无法读取 RunningHub 工作流标题");
                 const html = await response.text();
                 const rawTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "";
@@ -270,7 +277,7 @@ function directCodexImagegen(): Plugin {
                 if (!matched) throw new Error("仅支持上传画布中的媒体数据");
                 const formData = new FormData();
                 formData.append("file", new Blob([Buffer.from(matched[2], "base64")], { type: matched[1] }), safeRunningHubFileName(body.fileName));
-                const response = await fetch("https://www.runninghub.cn/openapi/v2/media/upload/binary", {
+                const response = await fetch(`${runningHubApiBaseUrl(body.baseUrl)}/openapi/v2/media/upload/binary`, {
                     method: "POST",
                     headers: { Authorization: `Bearer ${apiKey}` },
                     body: formData,
@@ -358,11 +365,11 @@ function runningHubNumericId(value: unknown, label: string) {
     return id;
 }
 
-function runningHubTaskUrl(kind: "standard" | "app" | "workflow", target: string) {
-    if (kind === "app") return `https://www.runninghub.cn/openapi/v2/run/ai-app/${runningHubNumericId(target, "AI 应用 ID")}`;
-    if (kind === "workflow") return `https://www.runninghub.cn/openapi/v2/run/workflow/${runningHubNumericId(target, "工作流 ID")}`;
+function runningHubTaskUrl(kind: "standard" | "app" | "workflow", target: string, baseUrl: string) {
+    if (kind === "app") return `${baseUrl}/openapi/v2/run/ai-app/${runningHubNumericId(target, "AI 应用 ID")}`;
+    if (kind === "workflow") return `${baseUrl}/openapi/v2/run/workflow/${runningHubNumericId(target, "工作流 ID")}`;
     if (!/^\/openapi\/v2\/[a-z0-9./-]+$/i.test(target)) throw new Error("标准模型接口路径无效");
-    return `https://www.runninghub.cn${target}`;
+    return `${baseUrl}${target}`;
 }
 
 /** 仅构造 RunningHub API 手册公开列出的任务层字段。 */
@@ -396,8 +403,8 @@ const RUNNINGHUB_COVER_MAX_BYTES = 8 * 1024 * 1024;
 
 type RunningHubCover = { data: Buffer; contentType: "image/jpeg" | "image/png" | "image/webp"; extension: "jpg" | "png" | "webp" };
 
-function runningHubCoverFileName(kind: RunningHubCoverKind, id: string, extension: RunningHubCover["extension"]) {
-    return `${kind}-${id}.${extension}`;
+function runningHubCoverFileName(kind: RunningHubCoverKind, id: string, site: string, extension: RunningHubCover["extension"]) {
+    return `${site}-${kind}-${id}.${extension}`;
 }
 
 /** 内容类型不可靠时按扩展名兜底：RunningHub 部分封面以 application/octet-stream 返回。 */
@@ -419,14 +426,14 @@ function runningHubCoverFormat(contentType: string, source?: string | URL): Pick
     return undefined;
 }
 
-async function readRunningHubCover(kind: RunningHubCoverKind, id: string): Promise<RunningHubCover | undefined> {
+async function readRunningHubCover(kind: RunningHubCoverKind, id: string, site: string): Promise<RunningHubCover | undefined> {
     for (const format of [
         { contentType: "image/jpeg" as const, extension: "jpg" as const },
         { contentType: "image/png" as const, extension: "png" as const },
         { contentType: "image/webp" as const, extension: "webp" as const },
     ]) {
         try {
-            const data = await readFile(join(RUNNINGHUB_COVER_DIRECTORY, runningHubCoverFileName(kind, id, format.extension)));
+            const data = await readFile(join(RUNNINGHUB_COVER_DIRECTORY, runningHubCoverFileName(kind, id, site, format.extension)));
             if (data.length && data.length <= RUNNINGHUB_COVER_MAX_BYTES) return { data, ...format };
         } catch {
             // 缓存尚未写入时继续尝试下载。
@@ -435,14 +442,14 @@ async function readRunningHubCover(kind: RunningHubCoverKind, id: string): Promi
     return undefined;
 }
 
-async function writeRunningHubCover(kind: RunningHubCoverKind, id: string, cover: RunningHubCover) {
+async function writeRunningHubCover(kind: RunningHubCoverKind, id: string, site: string, cover: RunningHubCover) {
     await mkdir(RUNNINGHUB_COVER_DIRECTORY, { recursive: true });
-    await writeFile(join(RUNNINGHUB_COVER_DIRECTORY, runningHubCoverFileName(kind, id, cover.extension)), cover.data);
+    await writeFile(join(RUNNINGHUB_COVER_DIRECTORY, runningHubCoverFileName(kind, id, site, cover.extension)), cover.data);
 }
 
-function runningHubCoverImageUrl(value: string) {
+function runningHubCoverImageUrl(value: string, baseUrl: string) {
     try {
-        const url = new URL(value, "https://www.runninghub.cn");
+        const url = new URL(value, baseUrl);
         const trustedImageHost = url.hostname === "rh-images.xiaoyaoyou.com" || url.hostname.endsWith(".myqcloud.com");
         return url.protocol === "https:" && trustedImageHost ? url : undefined;
     } catch {
@@ -451,8 +458,8 @@ function runningHubCoverImageUrl(value: string) {
 }
 
 /** AI 应用封面优先走公开详情接口；不少应用详情页只是 SPA 外壳，HTML 里抓不到封面。 */
-async function runningHubAppCoverSource(id: string) {
-    const response = await fetch("https://www.runninghub.cn/api/webapp/detail", {
+async function runningHubAppCoverSource(id: string, baseUrl: string) {
+    const response = await fetch(`${baseUrl}/api/webapp/detail`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "Mozilla/5.0" },
         body: JSON.stringify({ webappId: id }),
@@ -476,8 +483,8 @@ async function runningHubAppCoverSource(id: string) {
 }
 
 /** 服务端渲染的详情页兜底：工作流以项目页（/post）为准，API 手册页作为后备。 */
-async function runningHubCoverSourceFromPage(kind: RunningHubCoverKind, id: string) {
-    const pageUrls = kind === "app" ? [`https://www.runninghub.cn/ai-detail/${id}`] : [`https://www.runninghub.cn/post/${id}`, `https://www.runninghub.cn/call-api/api-detail/${id}?apiType=5`];
+async function runningHubCoverSourceFromPage(kind: RunningHubCoverKind, id: string, baseUrl: string) {
+    const pageUrls = kind === "app" ? [`${baseUrl}/ai-detail/${id}`] : [`${baseUrl}/post/${id}`, `${baseUrl}/call-api/api-detail/${id}?apiType=5`];
     for (const pageUrl of pageUrls) {
         const page = await fetch(pageUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
         if (!page.ok) continue;
@@ -489,8 +496,8 @@ async function runningHubCoverSourceFromPage(kind: RunningHubCoverKind, id: stri
     return undefined;
 }
 
-async function downloadRunningHubCover(kind: RunningHubCoverKind, id: string): Promise<RunningHubCover | undefined> {
-    const source = runningHubCoverImageUrl(((kind === "app" ? await runningHubAppCoverSource(id) : undefined) || (await runningHubCoverSourceFromPage(kind, id)) || ""));
+async function downloadRunningHubCover(kind: RunningHubCoverKind, id: string, baseUrl: string): Promise<RunningHubCover | undefined> {
+    const source = runningHubCoverImageUrl(((kind === "app" ? await runningHubAppCoverSource(id, baseUrl) : undefined) || (await runningHubCoverSourceFromPage(kind, id, baseUrl)) || ""), baseUrl);
     if (!source) return undefined;
     const image = await fetch(source, { headers: { "User-Agent": "Mozilla/5.0" } });
     if (!image.ok) return undefined;
@@ -512,22 +519,24 @@ function runningHubError(res: { statusCode: number; setHeader: (name: string, va
     res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "RunningHub 请求失败" }));
 }
 
-let runningHubCatalogCache: { expiresAt: number; items: RunningHubCatalogItem[] } | undefined;
+const runningHubCatalogCache = new Map<string, { expiresAt: number; items: RunningHubCatalogItem[] }>();
 
 /** 从 RunningHub 官方 API 文档目录提取标准图像、视频和音频模型接口，避免把 LLM / AI App 混为一类。 */
-async function runningHubModelCatalog() {
-    if (runningHubCatalogCache && runningHubCatalogCache.expiresAt > Date.now()) return runningHubCatalogCache.items;
-    const indexResponse = await fetch("https://www.runninghub.cn/runninghub-api-doc-cn/");
+async function runningHubModelCatalog(baseUrl: string) {
+    const cached = runningHubCatalogCache.get(baseUrl);
+    if (cached && cached.expiresAt > Date.now()) return cached.items;
+    const docsPath = runningHubSiteFromBaseUrl(baseUrl) === "ai" ? "runninghub-api-doc-en" : "runninghub-api-doc-cn";
+    const indexResponse = await fetch(`${baseUrl}/${docsPath}/`);
     if (!indexResponse.ok) throw new Error(`无法读取 RunningHub 模型目录（${indexResponse.status}）`);
     const indexHtml = await indexResponse.text();
-    const links = Array.from(indexHtml.matchAll(/href="(\/runninghub-api-doc-cn\/api-\d+)">([^<]+)<\/a>/g))
+    const links = Array.from(indexHtml.matchAll(new RegExp(`href="(\\/${docsPath}\\/api-\\d+)">([^<]+)<\\/a>`, "g")))
         .map((match) => ({ path: match[1], name: match[2].replace(/\0/g, "").trim() }))
         .filter((item) => item.name && runningHubCapability(item.name));
     const uniqueLinks = Array.from(new Map(links.map((item) => [item.path, item])).values());
     const items = (
         await mapWithConcurrency(uniqueLinks, 12, async (item) => {
             try {
-                const detailResponse = await fetch(`https://www.runninghub.cn${item.path}`);
+                const detailResponse = await fetch(`${baseUrl}${item.path}`);
                 if (!detailResponse.ok) return undefined;
                 const detailHtml = await detailResponse.text();
                 const target = detailHtml.match(/\/openapi\/v2\/[a-z0-9./-]+/i)?.[0];
@@ -539,7 +548,7 @@ async function runningHubModelCatalog() {
         })
     ).filter((item): item is RunningHubCatalogItem => Boolean(item));
     const deduped = Array.from(new Map(items.map((item) => [`${item.capability}:${item.target}`, item])).values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
-    runningHubCatalogCache = { items: deduped, expiresAt: Date.now() + 10 * 60 * 1000 };
+    runningHubCatalogCache.set(baseUrl, { items: deduped, expiresAt: Date.now() + 10 * 60 * 1000 });
     return deduped;
 }
 

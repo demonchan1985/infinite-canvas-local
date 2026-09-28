@@ -5,7 +5,7 @@ import { Group, Minus, Plus, Scan, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
-import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
+import { prepareRunningHubWorkflowConfig, requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, decodeChannelModel, encodeChannelModel, findChannelModel, modelOptionsFromChannels, useConfigStore, useEffectiveConfig, type AiConfig, type ChannelModel } from "@/stores/use-config-store";
@@ -28,7 +28,7 @@ import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer
 import { CanvasConfigNodePanel } from "@/components/canvas/canvas-config-node-panel";
 import { RUNNING_HUB_WORKFLOW_NODE_WIDTH, runningHubWorkflowCardHeight } from "@/components/canvas/canvas-runninghub-workflow-node";
 import { CanvasRunningHubWorkflowSelect } from "@/components/canvas/canvas-runninghub-workflow-settings-popover";
-import { RUNNING_HUB_WORKFLOW_PORT_X, migrateUnambiguousRunningHubLegacyConnections, runningHubWorkflowAutoPort, runningHubWorkflowContentScale, runningHubWorkflowPortHeads, runningHubWorkflowPortIdentity, runningHubWorkflowPortY } from "@/components/canvas/canvas-runninghub-workflow-ports";
+import { migrateUnambiguousRunningHubLegacyConnections, runningHubWorkflowAutoPort, runningHubWorkflowContentScale, runningHubWorkflowPortHeads, runningHubWorkflowPortIdentity, runningHubWorkflowPortX, runningHubWorkflowPortY, type RunningHubWorkflowPortHead } from "@/components/canvas/canvas-runninghub-workflow-ports";
 import { RUNNING_HUB_WORKFLOW_INSTANCE_TYPES, runningHubWorkflowInstanceLabel, type RunningHubWorkflowInstanceType } from "@/components/canvas/runninghub-workflow-settings";
 import { CanvasWorkflowLibraryModal, type CanvasWorkflowLibraryItem } from "@/components/canvas/canvas-workflow-library-modal";
 import { CanvasNodeContextMenu } from "@/components/canvas/canvas-context-menu";
@@ -52,6 +52,7 @@ import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { CanvasNodeSearch } from "@/components/canvas/canvas-node-search";
 import { arrangeAllGroupImageNodes, arrangeCanvasNodes, fitCanvasViewport } from "@/lib/canvas/canvas-layout";
 import { useCanvasWorkspaceStore } from "@/stores/canvas/use-canvas-workspace-store";
+import { useCanvasErrorLogStore } from "@/stores/canvas/use-canvas-error-log-store";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
@@ -197,7 +198,7 @@ function mergeStoryboardRows(existing: CanvasStoryboardRow[], content: string): 
 
 function normalizeGeneratedImageScale(node: CanvasNodeData): CanvasNodeData {
     const metadata = node.metadata;
-    if (node.type !== CanvasNodeType.Image || !metadata?.generationType || metadata.freeResize || metadata.imageDisplayScale === "standard-v2" || !metadata.naturalWidth || !metadata.naturalHeight) return node;
+    if (node.type !== CanvasNodeType.Image || !metadata?.generationType || metadata.imageDisplayScale === "standard-v2" || !metadata.naturalWidth || !metadata.naturalHeight) return node;
     const size = fitImageNodeSize(metadata.naturalWidth, metadata.naturalHeight);
     const centerX = node.position.x + node.width / 2;
     const centerY = node.position.y + node.height / 2;
@@ -412,18 +413,17 @@ function InfiniteCanvasPage() {
     const [isNodeDragging, setIsNodeDragging] = useState(false);
     const [isNodeResizing, setIsNodeResizing] = useState(false);
 
-    const runningHubChannel = useMemo(() => config.channels.find((channel) => channel.apiFormat === "runninghub"), [config.channels]);
     const seedVrUpscaleModel = useMemo(() => findSeedVrUpscaleModel(config.channels), [config.channels]);
     const seedVrPixelField = useMemo(() => seedVrUpscalePixelField(seedVrUpscaleModel?.model.runningHub), [seedVrUpscaleModel]);
     const handleRunningHubWorkflowImported = useCallback(
-        (model: ChannelModel) => {
-            if (!runningHubChannel) return;
-            const channels = config.channels.map((channel) => (channel.id === runningHubChannel.id ? { ...channel, models: [model, ...channel.models.filter((item) => item.name !== model.name)] } : channel));
+        (model: ChannelModel, channelId: string) => {
+            if (!config.channels.some((channel) => channel.id === channelId && channel.apiFormat === "runninghub")) return;
+            const channels = config.channels.map((channel) => (channel.id === channelId ? { ...channel, models: [model, ...channel.models.filter((item) => item.name !== model.name)] } : channel));
             updateConfig("channels", channels);
             updateConfig("models", modelOptionsFromChannels(channels));
-            updateConfig(model.capability === "image" ? "imageModel" : model.capability === "audio" ? "audioModel" : model.capability === "text" ? "textModel" : "videoModel", encodeChannelModel(runningHubChannel.id, model.name));
+            updateConfig(model.capability === "image" ? "imageModel" : model.capability === "audio" ? "audioModel" : model.capability === "text" ? "textModel" : "videoModel", encodeChannelModel(channelId, model.name));
         },
-        [config.channels, runningHubChannel, updateConfig],
+        [config.channels, updateConfig],
     );
     const handleRunningHubWorkflowDeleted = useCallback(
         (item: CanvasWorkflowLibraryItem) => {
@@ -472,6 +472,19 @@ function InfiniteCanvasPage() {
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
     const videoPollIdsRef = useRef(new Set<string>());
     const previewDragRef = useRef<{ pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number } | null>(null);
+    const errorLogSeededProjectsRef = useRef(new Set<string>());
+
+    useEffect(() => {
+        if (!projectLoaded || errorLogSeededProjectsRef.current.has(projectId)) return;
+        errorLogSeededProjectsRef.current.add(projectId);
+        const secrets = [effectiveConfig.apiKey, effectiveConfig.systemPrompt, ...effectiveConfig.channels.flatMap((channel) => [channel.apiKey, channel.consumerApiKey || ""])];
+        for (const node of nodesRef.current) {
+            const errors = [node.metadata?.errorDetails, ...(node.metadata?.images || []).map((item) => item.errorDetails), ...(node.metadata?.texts || []).map((item) => item.errorDetails)];
+            for (const error of new Set(errors.filter((item): item is string => Boolean(item)))) {
+                useCanvasErrorLogStore.getState().record(new Error(error), { projectId, nodeId: node.id, nodeName: node.title, model: node.metadata?.model, stage: "已有卡片错误（发生时间未知）" }, [...secrets, node.metadata?.prompt || "", node.type === CanvasNodeType.Text ? node.metadata?.content || "" : ""]);
+            }
+        }
+    }, [effectiveConfig, projectId, projectLoaded]);
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
@@ -979,6 +992,14 @@ function InfiniteCanvasPage() {
     );
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    const runningHubPortHeadsByNodeId = useMemo(() => {
+        const heads = new Map<string, RunningHubWorkflowPortHead[]>();
+        nodes.forEach((node) => {
+            const resource = runningHubResourceForNode(effectiveConfig, node);
+            if (resource) heads.set(node.id, runningHubWorkflowPortHeads(resource, connections, node.id, node.height / runningHubWorkflowContentScale(node)));
+        });
+        return heads;
+    }, [connections, effectiveConfig, nodes]);
     const visibleConnections = useMemo(
         () =>
             connections.filter((connection) => {
@@ -987,17 +1008,17 @@ function InfiniteCanvasPage() {
                 if (!from || !to) return false;
                 const workflowResource = runningHubResourceForNode(effectiveConfig, to);
                 const workflowScale = workflowResource ? runningHubWorkflowContentScale(to) : 1;
-                const workflowPortY = runningHubWorkflowPortY(connection.toPort, Boolean(to.metadata?.runningHubWorkflowPortsOpen), workflowResource);
+                const workflowPortY = runningHubWorkflowPortY(connection.toPort, Boolean(to.metadata?.runningHubWorkflowPortsOpen), workflowResource, runningHubPortHeadsByNodeId.get(to.id));
                 return connectionIntersectsViewBounds(
                     { x: from.position.x + from.width, y: from.position.y + from.height / 2 },
                     {
-                        x: workflowPortY === undefined ? to.position.x : to.position.x + RUNNING_HUB_WORKFLOW_PORT_X * workflowScale,
+                        x: workflowPortY === undefined ? to.position.x : to.position.x + runningHubWorkflowPortX(viewport.k),
                         y: connection.toPort ? to.position.y + (workflowPortY === undefined ? to.height / 2 : workflowPortY * workflowScale) : to.position.y + to.height / 2,
                     },
                     viewBounds,
                 );
             }),
-        [connections, effectiveConfig, nodeById, viewBounds],
+        [connections, effectiveConfig, nodeById, runningHubPortHeadsByNodeId, viewport.k, viewBounds],
     );
     // The toolbar follows a single selected node selected by click, creation, marquee, or keyboard.
     // It stays hidden for multi-selection and while isNodeDragging is true.
@@ -1619,7 +1640,7 @@ function InfiniteCanvasPage() {
     }, []);
 
     // Capture-phase selection lets any inner element, including textarea or iframe, select the node and show its toolbar.
-    // It only selects; body onMouseDown still starts dragging, so text selection inside editors does not drag the node.
+    // The bubbling handler starts dragging only from non-interactive card areas.
     // Cache the capture result for the following bubbling drag handler to avoid applying shift-selection twice.
     const pendingSelectionRef = useRef<Set<string> | null>(null);
     const handleNodeSelectCapture = useCallback(
@@ -1636,6 +1657,11 @@ function InfiniteCanvasPage() {
 
     const handleNodeMouseDown = useCallback((event: ReactMouseEvent, nodeId: string) => {
         event.stopPropagation();
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("button, input, textarea, select, label, a, [role='button'], [role='switch'], [role='slider'], [role='combobox'], [contenteditable='true'], .ant-slider, .ant-input-number, .ant-select")) {
+            pendingSelectionRef.current = null;
+            return;
+        }
         // Capture already selected the node; this only starts dragging, with a fallback selection if capture did not run.
         const currentNodes = nodesRef.current;
         const nextSelected = pendingSelectionRef.current ?? selectNodeByEvent(event, nodeId).nextSelected;
@@ -2098,19 +2124,6 @@ function InfiniteCanvasPage() {
     }, []);
     const handleNodeResizeEnd = useCallback(() => setIsNodeResizing(false), []);
 
-    const toggleNodeFreeResize = useCallback((nodeId: string) => {
-        setNodes((prev) =>
-            prev.map((node) => {
-                if (node.id !== nodeId) return node;
-                const freeResize = !node.metadata?.freeResize;
-                if (freeResize || node.type !== CanvasNodeType.Image) return { ...node, metadata: { ...node.metadata, freeResize } };
-                const ratio = (node.metadata?.naturalWidth || node.width) / (node.metadata?.naturalHeight || node.height || 1);
-                const height = node.width / ratio;
-                return { ...node, height, position: { x: node.position.x, y: node.position.y + node.height / 2 - height / 2 }, metadata: { ...node.metadata, freeResize } };
-            }),
-        );
-    }, []);
-
     const handleNodeContentChange = useCallback((nodeId: string, content: string) => {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, content, texts: node.metadata?.texts?.map((text) => (text.id === node.metadata?.primaryTextId ? { ...text, content } : text)) } } : node)));
     }, []);
@@ -2167,7 +2180,7 @@ function InfiniteCanvasPage() {
                 const image = node.metadata?.images?.find((item) => item.id === itemId);
                 if (!image?.content) return node;
                 const edge = Math.max(node.width, node.height);
-                const size = node.metadata?.freeResize ? { width: node.width, height: node.height } : fitNodeSize(image.naturalWidth, image.naturalHeight, edge, edge);
+                const size = fitNodeSize(image.naturalWidth, image.naturalHeight, edge, edge);
                 return {
                     ...node,
                     position: { x: node.position.x + node.width / 2 - size.width / 2, y: node.position.y + node.height / 2 - size.height / 2 },
@@ -2893,7 +2906,6 @@ function InfiniteCanvasPage() {
                                           ...node.metadata,
                                           ...imageMetadata(image),
                                           errorDetails: undefined,
-                                          freeResize: false,
                                           images: undefined,
                                           generationType: undefined,
                                           model: undefined,
@@ -3001,7 +3013,9 @@ function InfiniteCanvasPage() {
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-            const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
+            let generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
+            const sensitiveValues = [generationConfig.apiKey, generationConfig.systemPrompt, prompt, ...generationConfig.channels.flatMap((channel) => [channel.apiKey, channel.consumerApiKey || ""])];
+            const recordGenerationError = (error: unknown) => useCanvasErrorLogStore.getState().record(error, { projectId, nodeId, nodeName: sourceNode?.title, model: generationConfig.model }, sensitiveValues);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -3020,6 +3034,7 @@ function InfiniteCanvasPage() {
                     const fullPrompt = (builtinPanel.promptPrefix || "") + scene;
                     const context = await hydrateNodeGenerationContext(buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, fullPrompt));
                     const enhancedContext = { ...context, prompt: composeCanvasCreativePrompt(context.prompt, sourceNode.metadata?.creativePresets, mode) };
+                    sensitiveValues.push(enhancedContext.prompt);
                     const refs = enhancedContext.referenceImages;
                     const image = refs.length
                         ? await requestEdit({ ...generationConfig, count: "1" }, enhancedContext.prompt, refs, { signal: controller.signal }).then((items) => items[0])
@@ -3031,6 +3046,7 @@ function InfiniteCanvasPage() {
                     setDialogNodeId(null);
                 } catch (error) {
                     if (!isGenerationCanceled(error)) {
+                        recordGenerationError(error);
                         const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                         message.error(errorDetails);
                         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
@@ -3043,6 +3059,19 @@ function InfiniteCanvasPage() {
 
             setRunningNodeId(nodeId);
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
+            try {
+                generationConfig = await prepareRunningHubWorkflowConfig(generationConfig, runController.signal);
+            } catch (error) {
+                if (!isGenerationCanceled(error)) {
+                    recordGenerationError(error);
+                    const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
+                    message.error(errorDetails);
+                    setNodes((prev) => prev.map((node) => node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node));
+                }
+                finishGenerationRequest(nodeId, runController);
+                setRunningNodeId(null);
+                return;
+            }
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
             const initialPrompt = editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt;
@@ -3054,6 +3083,7 @@ function InfiniteCanvasPage() {
             );
             const generationContext = { ...rawGenerationContext, prompt: composeCanvasCreativePrompt(rawGenerationContext.prompt, sourceNode?.metadata?.creativePresets, mode) };
             const effectivePrompt = generationContext.prompt.trim();
+            sensitiveValues.push(effectivePrompt);
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
                 setRunningNodeId(null);
@@ -3197,6 +3227,7 @@ function InfiniteCanvasPage() {
                                 return true;
                             } catch (error) {
                                 if (isGenerationCanceled(error)) return false;
+                                recordGenerationError(error);
                                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                                 if (!firstError) firstError = errorDetails;
                                 hasFailure = true;
@@ -3416,6 +3447,7 @@ function InfiniteCanvasPage() {
                             return { id: textId, status: NODE_STATUS_SUCCESS, content } satisfies CanvasNodeText;
                         } catch (error) {
                             if (isGenerationCanceled(error)) return null;
+                            recordGenerationError(error);
                             const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                             setNodes((prev) =>
                                 prev.map((node) => (node.id === rootId ? { ...node, metadata: { ...node.metadata, texts: node.metadata?.texts?.map((item) => (item.id === textId ? { ...item, status: NODE_STATUS_ERROR, errorDetails } : item)) } } : node)),
@@ -3455,6 +3487,7 @@ function InfiniteCanvasPage() {
                 );
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
+                recordGenerationError(error);
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                 message.error(errorDetails);
                 setNodes((prev) =>
@@ -3471,7 +3504,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, projectId, startGenerationRequest, t],
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
@@ -3486,7 +3519,7 @@ function InfiniteCanvasPage() {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? node.metadata : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
-            const generationConfig =
+            let generationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
                           ...effectiveConfig,
@@ -3502,8 +3535,8 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
-            const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
+            let context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+            let prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
             if (!prompt) {
                 message.warning(t("canvas.projectPage.retryPromptMissing"));
                 return;
@@ -3531,7 +3564,7 @@ function InfiniteCanvasPage() {
                 );
                 return;
             }
-            const retryImages = retryReferenceImages || [];
+            let retryImages = retryReferenceImages || [];
 
             setRunningNodeId(node.id);
             setNodes((prev) =>
@@ -3552,6 +3585,13 @@ function InfiniteCanvasPage() {
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
 
             try {
+                generationConfig = await prepareRunningHubWorkflowConfig(generationConfig, controller.signal);
+                const runningHub = findChannelModel(generationConfig, generationConfig.model)?.model.runningHub;
+                if (!hasSavedImageMetadata && sourceNode.type === CanvasNodeType.Config && runningHub && ["workflow", "app"].includes(runningHub.kind)) {
+                    context = await hydrateNodeGenerationContext(buildRunningHubWorkflowGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || "", runningHub));
+                    prompt = composeCanvasCreativePrompt(context.prompt, sourceNode.metadata?.creativePresets, node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : node.type === CanvasNodeType.Text ? "text" : "image").trim();
+                    retryImages = context.referenceImages;
+                }
                 if (node.type === CanvasNodeType.Text) {
                     if (!context) return;
                     let streamed = "";
@@ -3572,6 +3612,8 @@ function InfiniteCanvasPage() {
                         signal: controller.signal,
                         referenceVideos: context?.referenceVideos || [],
                         referenceAudios: context?.referenceAudios || [],
+                        runningHubWorkflowBindings: context?.runningHubWorkflowBindings,
+                        runningHubWorkflowRunOptions: context?.runningHubWorkflowRunOptions,
                     });
                     if (task.provider === "openai") setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskProvider: "openai" } } : item)));
                     const video = await storeGeneratedVideo(await waitForVideoGenerationTask(generationConfig, task, { signal: controller.signal }));
@@ -3630,8 +3672,7 @@ function InfiniteCanvasPage() {
                         if (item.id !== node.id) return item;
                         const makePrimary = !imageId || !item.metadata?.content;
                         const edge = imageId ? Math.max(item.width, item.height) : 0;
-                        const imageSize =
-                            imageId && item.metadata?.freeResize ? { width: item.width, height: item.height } : imageId ? fitNodeSize(uploadedImage.width, uploadedImage.height, edge, edge) : fitImageNodeSize(uploadedImage.width, uploadedImage.height);
+                        const imageSize = imageId ? fitNodeSize(uploadedImage.width, uploadedImage.height, edge, edge) : fitImageNodeSize(uploadedImage.width, uploadedImage.height);
                         return {
                             ...item,
                             type: CanvasNodeType.Image,
@@ -3651,6 +3692,7 @@ function InfiniteCanvasPage() {
                 );
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
+                useCanvasErrorLogStore.getState().record(error, { projectId, nodeId: node.id, nodeName: node.title, model: generationConfig.model, stage: "重试生成" }, [generationConfig.apiKey, generationConfig.systemPrompt, prompt, ...generationConfig.channels.flatMap((channel) => [channel.apiKey, channel.consumerApiKey || ""])]);
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
                 message.error(errorDetails);
                 setNodes((prev) =>
@@ -3674,7 +3716,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, pollVideoNodeTask, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, pollVideoNodeTask, projectId, startGenerationRequest, t],
     );
 
     const deleteBatchImage = useCallback((nodeId: string, imageId: string) => {
@@ -4020,6 +4062,7 @@ function InfiniteCanvasPage() {
                                     flowing={from.metadata?.status === NODE_STATUS_LOADING || to.metadata?.status === NODE_STATUS_LOADING}
                                     workflowPortsOpen={Boolean(to.metadata?.runningHubWorkflowPortsOpen)}
                                     workflowResource={runningHubResource}
+                                    workflowPortHeads={runningHubPortHeadsByNodeId.get(to.id)}
                                     scale={viewport.k}
                                     onSelect={() => {
                                         setSelectedConnectionId(connection.id);
@@ -4044,8 +4087,10 @@ function InfiniteCanvasPage() {
                                 targetPortId={connectionTargetPortId || undefined}
                                 sourceWorkflowPortsOpen={Boolean(nodeById.get(connectingParams.nodeId)?.metadata?.runningHubWorkflowPortsOpen)}
                                 sourceWorkflowResource={nodeById.get(connectingParams.nodeId) ? runningHubResourceForNode(effectiveConfig, nodeById.get(connectingParams.nodeId)!) : undefined}
+                                sourceWorkflowPortHeads={runningHubPortHeadsByNodeId.get(connectingParams.nodeId)}
                                 targetWorkflowPortsOpen={Boolean(connectionTargetNodeId && nodeById.get(connectionTargetNodeId)?.metadata?.runningHubWorkflowPortsOpen)}
                                 targetWorkflowResource={connectionTargetNodeId && nodeById.get(connectionTargetNodeId) ? runningHubResourceForNode(effectiveConfig, nodeById.get(connectionTargetNodeId)!) : undefined}
+                                targetWorkflowPortHeads={connectionTargetNodeId ? runningHubPortHeadsByNodeId.get(connectionTargetNodeId) : undefined}
                                 scale={viewport.k}
                             />
                         ) : null}
@@ -4065,7 +4110,7 @@ function InfiniteCanvasPage() {
                                 isConnectionTarget={connectionTargetNodeId === node.id}
                                 isConnecting={Boolean(connectingParams)}
                                 hasDedicatedInputPorts={hasDedicatedInputPorts}
-                                runningHubPortHeads={runningHubResource ? runningHubWorkflowPortHeads(runningHubResource, connections, node.id) : undefined}
+                                runningHubPortHeads={runningHubPortHeadsByNodeId.get(node.id)}
                                 runningHubWorkflowPortsOpen={Boolean(node.metadata?.runningHubWorkflowPortsOpen)}
                                 referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes) ? "disabled" : "available"}
                                 showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel && !isReversePromptConfigNode(node)}
@@ -4229,7 +4274,6 @@ function InfiniteCanvasPage() {
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
                     onRetry={(node) => void handleRetryNode(node)}
-                    onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}
                     viewMode={viewMode}
                 />
@@ -4317,7 +4361,7 @@ function InfiniteCanvasPage() {
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
                 <CanvasPluginManagerModal open={pluginManagerOpen} onClose={() => setPluginManagerOpen(false)} />
-                <RunningHubWorkflowImportModal open={runningHubWorkflowImportOpen} channel={runningHubChannel || null} onClose={() => setRunningHubWorkflowImportOpen(false)} onImported={handleRunningHubWorkflowImported} />
+                <RunningHubWorkflowImportModal open={runningHubWorkflowImportOpen} channels={config.channels} onClose={() => setRunningHubWorkflowImportOpen(false)} onImported={handleRunningHubWorkflowImported} />
                 <CanvasWorkflowLibraryModal open={workflowLibraryOpen} onClose={() => setWorkflowLibraryOpen(false)} onAdd={addWorkflowLibraryNode} onDelete={handleRunningHubWorkflowDeleted} />
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => void cropImageNode(cropNode!, crop)} /> : null}

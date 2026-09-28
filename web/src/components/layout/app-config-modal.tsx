@@ -12,6 +12,7 @@ import { exportAppConfig, importAppConfig } from "@/services/config-file";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
+import { mergeRunningHubSiteDrafts, runningHubSiteFromBaseUrl, visibleChannelGroups } from "@/lib/runninghub-site";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
@@ -99,15 +100,16 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     };
 
     const deleteChannel = (id: string) => {
-        if (config.channels.length <= 1) {
+        const next = config.channels.filter((channel) => channel.id !== id && channel.id !== `${id}:cn` && channel.id !== `${id}:ai`);
+        if (!next.length) {
             message.warning(t("config.channels.keepOne"));
             return;
         }
-        updateChannels(config.channels.filter((channel) => channel.id !== id));
+        updateChannels(next);
     };
 
-    const saveChannel = (channel: ModelChannel) => {
-        updateChannels(config.channels.map((item) => (item.id === channel.id ? channel : item)));
+    const saveChannel = (channels: ModelChannel[]) => {
+        updateChannels(mergeRunningHubSiteDrafts(config.channels, channels));
     };
 
     const testWebdav = async () => {
@@ -190,12 +192,13 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     </Button>
                                 </div>
                                 <div className="space-y-2">
-                                    {config.channels.map((channel) => (
-                                        <div key={channel.id} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-4 py-3 dark:border-stone-800">
+                                    {visibleChannelGroups(config.channels).map((channel) => {
+                                        const group = channel.apiFormat === "runninghub" ? config.channels.filter((item) => item.apiFormat === "runninghub" && (item.id === channel.id || item.id === `${channel.id}:cn` || item.id === `${channel.id}:ai`)) : [channel];
+                                        return <div key={channel.id} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-4 py-3 dark:border-stone-800">
                                             <div className="min-w-0">
                                                 <div className="truncate text-sm font-semibold">{channel.name || t("config.channels.unnamed")}</div>
                                                 <div className="mt-1 truncate text-xs text-stone-500">
-                                                    {apiFormatLabel(channel.apiFormat)} · {t("config.channels.modelCount", { count: channel.models.length })} · {channel.baseUrl || t("config.channels.missingUrl")}
+                                                    {apiFormatLabel(channel.apiFormat)} · {t("config.channels.modelCount", { count: group.reduce((total, item) => total + item.models.length, 0) })} · {group.length > 1 ? group.map((item) => runningHubSiteFromBaseUrl(item.baseUrl).toUpperCase()).join(" / ") : channel.baseUrl || t("config.channels.missingUrl")}
                                                 </div>
                                             </div>
                                             <div className="flex shrink-0 gap-2">
@@ -204,8 +207,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                 </Button>
                                                 <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => deleteChannel(channel.id)} />
                                             </div>
-                                        </div>
-                                    ))}
+                                        </div>;
+                                    })}
                                 </div>
                             </div>
                         ),
@@ -320,7 +323,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                     </Button>
                 </div>
             ) : null}
-            <ChannelEditorDrawer open={Boolean(editingChannel)} channel={editingChannel} onSave={saveChannel} onClose={() => setEditingChannelId("")} />
+            <ChannelEditorDrawer open={Boolean(editingChannel)} channel={editingChannel} channels={config.channels} onSave={saveChannel} onClose={() => setEditingChannelId("")} />
         </>
     );
 }

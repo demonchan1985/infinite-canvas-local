@@ -3,15 +3,16 @@ export type RunningHubCoverKind = "app" | "workflow";
 /** 封面解析规则的版本号：规则变化时递增，可绕过浏览器里按旧规则缓存的封面。 */
 export const RUNNINGHUB_COVER_VERSION = 2;
 
-export function runningHubCoverUrl(kind: string | undefined, target: string | undefined) {
+export function runningHubCoverUrl(kind: string | undefined, target: string | undefined, baseUrl?: string) {
     const id = target?.trim() || "";
     if ((kind !== "app" && kind !== "workflow") || !/^\d+$/.test(id)) return undefined;
-    return `/api/runninghub/cover?kind=${kind}&id=${id}&v=${RUNNINGHUB_COVER_VERSION}`;
+    const site = /^https:\/\/www\.runninghub\.ai\/?$/i.test(baseUrl || "") ? "ai" : "cn";
+    return `/api/runninghub/cover?kind=${kind}&id=${id}&site=${site}&v=${RUNNINGHUB_COVER_VERSION}`;
 }
 
 /** 封面为附加展示资源，读取失败不影响项目导入或运行。 */
-export async function warmRunningHubCover(kind: string | undefined, target: string | undefined) {
-    const url = runningHubCoverUrl(kind, target);
+export async function warmRunningHubCover(kind: string | undefined, target: string | undefined, baseUrl?: string) {
+    const url = runningHubCoverUrl(kind, target, baseUrl);
     if (!url) return;
     await fetch(url).catch(() => undefined);
 }

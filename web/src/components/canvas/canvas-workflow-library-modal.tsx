@@ -12,6 +12,7 @@ export type CanvasWorkflowLibraryItem = {
     id: string;
     title: string;
     channelName: string;
+    channelBaseUrl: string;
     model: ChannelModel;
 };
 
@@ -34,7 +35,7 @@ export function CanvasWorkflowLibraryModal({ open, onClose, onAdd, onDelete }: {
                 channel.models.flatMap((model) => {
                     const kind = model.runningHub?.kind;
                     if (channel.apiFormat !== "runninghub" || (kind !== "workflow" && kind !== "app")) return [];
-                    return [{ id: encodeChannelModel(channel.id, model.name), title: model.runningHub?.title || model.name, channelName: channel.name, model }];
+                    return [{ id: encodeChannelModel(channel.id, model.name), title: model.runningHub?.title || model.name, channelName: channel.name, channelBaseUrl: channel.baseUrl, model }];
                 }),
             ),
         [config.channels],
@@ -42,14 +43,14 @@ export function CanvasWorkflowLibraryModal({ open, onClose, onAdd, onDelete }: {
     const refreshedTitlesRef = useRef(new Set<string>());
     useEffect(() => {
         if (!open) return;
-        const pending = items.filter((item) => item.model.runningHub?.kind === "workflow" && !item.model.runningHub.title && /^工作流\s+\d+$/.test(item.model.name) && !refreshedTitlesRef.current.has(item.model.runningHub.target));
-        pending.forEach((item) => refreshedTitlesRef.current.add(item.model.runningHub!.target));
+        const pending = items.filter((item) => item.model.runningHub?.kind === "workflow" && !item.model.runningHub.title && /^工作流\s+\d+$/.test(item.model.name) && !refreshedTitlesRef.current.has(item.id));
+        pending.forEach((item) => refreshedTitlesRef.current.add(item.id));
         if (!pending.length) return;
-        void Promise.all(pending.map(async (item) => ({ item, title: await fetchRunningHubWorkflowTitle(item.model.runningHub!.target).catch(() => "") }))).then((resolved) => {
-            const updates = new Map(resolved.filter((entry) => entry.title).map((entry) => [entry.item.model.runningHub!.target, entry.title]));
+        void Promise.all(pending.map(async (item) => ({ item, title: await fetchRunningHubWorkflowTitle(item.model.runningHub!.target, item.channelBaseUrl).catch(() => "") }))).then((resolved) => {
+            const updates = new Map(resolved.filter((entry) => entry.title).map((entry) => [entry.item.id, entry.title]));
             if (!updates.size) return;
             updateConfig("channels", config.channels.map((channel) => ({ ...channel, models: channel.models.map((model) => {
-                const title = model.runningHub?.target ? updates.get(model.runningHub.target) : undefined;
+                const title = model.runningHub?.target ? updates.get(encodeChannelModel(channel.id, model.name)) : undefined;
                 return title && model.runningHub?.kind === "workflow" ? { ...model, runningHub: { ...model.runningHub, title } } : model;
             }) })));
         });
@@ -100,7 +101,7 @@ function WorkflowLibraryCard({ item, onClick, onDelete }: { item: CanvasWorkflow
     const inputs = (resource.promptBinding ? 1 : 0) + (resource.imageBindings?.length || 0) + (resource.videoBindings?.length || 0) + (resource.audioBindings?.length || 0);
     return <div className="group relative overflow-hidden rounded-xl border text-left transition hover:-translate-y-0.5 hover:shadow-lg" style={{ background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}>
         <button type="button" onClick={onClick} title={`添加 ${item.title} 到画布`} className="block w-full text-left">
-            <RunningHubCoverCard url={runningHubCoverUrl(resource.kind, resource.target)} title={item.title} icon={isWorkflow ? Workflow : AppWindow} theme={theme} />
+            <RunningHubCoverCard url={runningHubCoverUrl(resource.kind, resource.target, item.channelBaseUrl)} title={item.title} icon={isWorkflow ? Workflow : AppWindow} theme={theme} />
             <div className="p-3"><div className="truncate pr-8 text-sm font-semibold">{item.title}</div><div className="mt-1 truncate text-xs opacity-55">{item.channelName} · {isWorkflow ? "云端工作流" : "AI 应用"}</div><div className="mt-3 flex items-center justify-between text-xs"><span>{resource.workflowFields?.length || 0} 个参数</span><span>{inputs} 个输入</span></div></div>
         </button>
         <button type="button" aria-label={`删除 ${item.title}`} title="从节点库删除" onClick={onDelete} className="absolute right-2 top-2 grid size-8 place-items-center rounded-full bg-black/55 text-white opacity-80 transition hover:bg-red-600 hover:opacity-100">

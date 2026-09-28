@@ -53,3 +53,9 @@ test("文本节点工具条接入本地导入、标签和已有正文确认", ()
     assert.match(projectSource, /onTextTagsChange=\{handleTextNodeTagsChange\}/);
     assert.match(projectSource, /textTags: normalizeCanvasTextTags\(textTags\)/);
 });
+
+test("文本节点工具条可一键复制当前显示的正文", () => {
+    assert.match(hoverToolbarSource, /const textContent = isText \? primaryTextContent\(node\) : ""/);
+    assert.match(hoverToolbarSource, /isText && textContent[\s\S]*?id: "copyText"[\s\S]*?title: t\("assets\.copyText"\)[\s\S]*?icon: <Copy className="size-4" \/>[\s\S]*?onClick: \(\) => copyText\(textContent\)/);
+    assert.match(hoverToolbarSource, /aria-label=\{title\}/);
+});

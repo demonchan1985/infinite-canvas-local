@@ -1,9 +1,11 @@
-import type { CSSProperties } from "react";
-import { Modal, Tag, Timeline } from "antd";
+import { useEffect, useState, type CSSProperties } from "react";
+import { Alert, App, Button, Modal, Tag, Timeline } from "antd";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useVersionCheck } from "@/hooks/use-version-check";
 import { APP_VERSION } from "@/constant/env";
+import { checkLocalUpdate, fetchLocalUpdateStatus, startLocalUpdate, type LocalUpdateStatus } from "@/services/api/canvas-agent";
+import { useAgentStore } from "@/stores/use-agent-store";
 
 function getTagColor(type: string) {
     if (type === "新增" || type === "Added") return "green";
@@ -25,7 +27,59 @@ type VersionReleaseModalProps = {
 
 export function VersionReleaseModal({ className, style }: VersionReleaseModalProps) {
     const { t } = useTranslation();
+    const { modal } = App.useApp();
+    const agentUrl = useAgentStore((state) => state.url);
+    const agentToken = useAgentStore((state) => state.token);
+    const agentConnected = useAgentStore((state) => state.connected);
+    const [updateRunning, setUpdateRunning] = useState(false);
+    const [updateStatus, setUpdateStatus] = useState<LocalUpdateStatus | null>(null);
+    const [updateError, setUpdateError] = useState("");
     const { open, setOpen, openReleaseModal, latestVersion, releases, checking, hasNewVersion, checkLatestRelease } = useVersionCheck();
+
+    useEffect(() => {
+        if (!updateRunning) return;
+        let active = true;
+        const poll = async () => {
+            try {
+                const next = await fetchLocalUpdateStatus(agentUrl, agentToken);
+                if (!active) return;
+                setUpdateStatus(next);
+                if (next.phase === "done") window.location.reload();
+                if (next.phase === "failed") {
+                    setUpdateError(next.error || t("version.updatePhases.failed"));
+                    setUpdateRunning(false);
+                }
+            } catch { /* Agent 退出与重启期间连接暂不可用。 */ }
+        };
+        void poll();
+        const timer = window.setInterval(() => void poll(), 1500);
+        return () => { active = false; window.clearInterval(timer); };
+    }, [agentToken, agentUrl, t, updateRunning]);
+
+    const requestUpdate = async () => {
+        setUpdateError("");
+        if (!agentConnected || !agentToken) return void setUpdateError(t("version.updateUnavailable"));
+        try {
+            const check = await checkLocalUpdate(agentUrl, agentToken);
+            if (!check.ok) return void setUpdateError(check.error || t("version.updateUnavailable"));
+        } catch (error) {
+            return void setUpdateError(error instanceof Error ? error.message : t("version.updateUnavailable"));
+        }
+        modal.confirm({
+            title: t("version.confirmUpdate"),
+            content: t("version.updateWarning"),
+            okText: t("version.installUpdate"),
+            onOk: async () => {
+                try {
+                    await startLocalUpdate(agentUrl, agentToken);
+                    setUpdateStatus({ phase: "stopping" });
+                    setUpdateRunning(true);
+                } catch (error) {
+                    setUpdateError(error instanceof Error ? error.message : t("version.updateFailed"));
+                }
+            },
+        });
+    };
 
     return (
         <>
@@ -60,6 +114,13 @@ export function VersionReleaseModal({ className, style }: VersionReleaseModalPro
                         </div>
                         <div className="mt-1 text-base font-semibold text-stone-950 dark:text-stone-100">{latestVersion}</div>
                     </div>
+                </div>
+                <div className="mb-5 space-y-3">
+                    <Button type="primary" onClick={() => void requestUpdate()} loading={updateRunning} disabled={updateRunning}>
+                        {t("version.installUpdate")}
+                    </Button>
+                    {updateRunning ? <Alert type="info" showIcon message={updateStatus ? t(`version.updatePhases.${updateStatus.phase}`) : t("version.updateProgress")} description={t("version.updateProgress")} role="status" /> : null}
+                    {updateError ? <Alert type="error" showIcon message={updateError} role="alert" /> : null}
                 </div>
                 <div className="max-h-[56vh] overflow-y-auto pr-2">
                     <Timeline

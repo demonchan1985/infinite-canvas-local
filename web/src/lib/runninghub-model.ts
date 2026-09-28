@@ -1,17 +1,24 @@
-import type { ChannelModel, ModelCapability, ModelChannel, RunningHubNodeBinding, RunningHubResource, RunningHubWorkflowField, RunningHubWorkflowPreview } from "@/stores/use-config-store";
+import type { ChannelModel, ModelCapability, ModelChannel, RunningHubNodeBinding, RunningHubResource, RunningHubWorkflowField, RunningHubWorkflowNode, RunningHubWorkflowPreview } from "@/stores/use-config-store";
 
 export const RUNNING_HUB_SEEDVR_APP_ID = "2051722999090434050";
 export const RUNNING_HUB_SEEDVR_PIXEL_FIELD_KEY = "82.index";
 export const RUNNING_HUB_SEEDVR_DEFAULT_PIXEL = 2;
+/** 不把一个页面 ID 猜测映射为另一个工作流 ID；最终以 API 图验证目标。 */
+export function canonicalRunningHubWorkflowId(id: string) {
+    return id;
+}
 
 type WorkflowNode = { id: string; classType: string; title: string; inputs: Record<string, unknown> };
 type WorkflowBindings = {
+    capability?: Extract<ModelCapability, "image" | "video" | "audio">;
     promptBinding?: RunningHubNodeBinding;
     imageBindings: RunningHubNodeBinding[];
     videoBindings: RunningHubNodeBinding[];
     audioBindings: RunningHubNodeBinding[];
     workflowFields: RunningHubWorkflowField[];
     workflowPreview: RunningHubWorkflowPreview;
+    workflowNodes?: RunningHubWorkflowNode[];
+    apiFieldKeys?: string[];
 };
 
 type RawWorkflowInput = { name?: string; link?: number | null; widget?: { name?: string } };
@@ -133,6 +140,39 @@ function rawWorkflow(value: unknown): RawWorkflow | null {
     return Array.isArray(record.nodes) && Array.isArray(record.links) ? record : null;
 }
 
+/** 诊断视图只提取节点、输入名称与连线，不保存提示词或素材值。 */
+export function parseRunningHubWorkflowNodes(payload: unknown): RunningHubWorkflowNode[] {
+    const record = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : null;
+    const data = record?.data && typeof record.data === "object" && !Array.isArray(record.data) ? record.data as Record<string, unknown> : null;
+    const graph = data?.prompt ?? data?.workflow ?? record?.prompt ?? payload;
+    const raw = rawWorkflow(graph);
+    if (raw) {
+        const linkById = new Map((raw.links || []).map((link) => [link[0], link]));
+        return (raw.nodes || []).filter((node) => node.id !== undefined).map((node) => ({
+            id: String(node.id), classType: node.type || "", title: node.title || "",
+            inputs: (node.inputs || []).map((input) => input.name || "").filter(Boolean),
+            links: (node.inputs || []).flatMap((input) => {
+                const link = typeof input.link === "number" ? linkById.get(input.link) : undefined;
+                return link && input.name ? [{ input: input.name, fromNodeId: String(link[1]) }] : [];
+            }),
+        }));
+    }
+    const nodes = workflowNodeList(graph);
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    return nodes.map((node) => ({
+        id: node.id, classType: node.classType, title: node.title,
+        inputs: Object.keys(node.inputs),
+        links: Object.entries(node.inputs).flatMap(([input, value]) => Array.isArray(value) && value.length === 2 && nodeIds.has(String(value[0])) && typeof value[1] === "number" ? [{ input, fromNodeId: String(value[0]) }] : []),
+    }));
+}
+
+function workflowOutputCapability(nodes: RunningHubWorkflowNode[]): Extract<ModelCapability, "image" | "video" | "audio"> | undefined {
+    const hasOutput = (pattern: RegExp) => nodes.some((node) => pattern.test(node.classType));
+    return hasOutput(/(?:Save|Output|Preview).*Video|Video(?:Combine|Save|Output)/i) ? "video"
+        : hasOutput(/(?:Save|Output|Preview).*Audio|Audio(?:Save|Output)/i) ? "audio"
+          : hasOutput(/(?:Save|Output|Preview).*Image|Image(?:Save|Output)/i) ? "image" : undefined;
+}
+
 function parseRawWorkflowBindings(raw: RawWorkflow): WorkflowBindings | null {
     const nodes = new Map((raw.nodes || []).flatMap((node) => (node.id === undefined ? [] : [[String(node.id), node] as const])));
     const linkById = new Map((raw.links || []).map((link) => [link[0], link]));
@@ -185,18 +225,18 @@ function parseRawWorkflowBindings(raw: RawWorkflow): WorkflowBindings | null {
     const seed = findRaw((node) => node.type === "RandomNoise");
     const secondPass = findRaw((node) => node.type === "easy float" && String(node.properties?.["Node name for S&R"] || "") === "easy float");
     const fields = directIntegratedH3 ? [
-        field(h3, "aspect", "画面比例", "select", ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]),
-        field(h3, "megapixels", "画面像素（MP）", "number", undefined, 0.1),
-        field(h3, "duration_seconds", "视频时长（秒）", "number", undefined, 1),
-        field(h3, "ref_image_size", "参考图尺寸", "select", ["match", "max", "min"]),
+        field(h3, "aspect", "画面比例", "text"),
+        field(h3, "megapixels", "画面像素（MP）", "number"),
+        field(h3, "duration_seconds", "视频时长（秒）", "number"),
+        field(h3, "ref_image_size", "参考图尺寸", "text"),
     ].filter((item): item is RunningHubWorkflowField => Boolean(item)) : [
         field(resolution, "aspect_ratio", "画面比例", "text"),
-        field(resolution, "megapixels", "画面像素（MP）", "number", undefined, 0.1),
-        field(duration, "value", duration?.title || "视频时长（秒）", "number", undefined, 1),
+        field(resolution, "megapixels", "画面像素（MP）", "number"),
+        field(duration, "value", duration?.title || "视频时长（秒）", "number"),
         field(h3, "ref_image_size", "参考图尺寸", "text"),
         field(sampler, "sampler_name", sampler?.title || "采样器", "text"),
-        field(seed, "noise_seed", seed?.title || "随机种子", "number", undefined, 1),
-        field(secondPass, "value", "二采倍数", "number", undefined, 0.1),
+        field(seed, "noise_seed", seed?.title || "随机种子", "number"),
+        field(secondPass, "value", "二采倍数", "number"),
     ].filter((item): item is RunningHubWorkflowField => Boolean(item));
     const directBinding = (fieldName: string): RunningHubNodeBinding => ({ nodeId: String(h3.id), fieldName });
     const directBindings = (prefix: string) => nodeInputs(h3).filter((input) => input.name?.startsWith(prefix)).map((input) => directBinding(input.name || ""));
@@ -223,27 +263,44 @@ function imageBindingOrder(fieldName: string, fallback: number) {
 export function parseRunningHubWorkflowBindings(payload: unknown): WorkflowBindings {
     const raw = rawWorkflow(payload);
     const parsedRaw = raw ? parseRawWorkflowBindings(raw) : null;
-    if (parsedRaw) return parsedRaw;
-    const nodes = workflowNodeList(payload);
-    const promptBinding = firstBinding(nodes, (node, field) => /^(text|prompt|positive|description)$/i.test(field) && /(text|prompt|clip|encode)/i.test(node.classType));
+    if (parsedRaw) {
+        const workflowNodes = parseRunningHubWorkflowNodes(payload);
+        return { ...parsedRaw, workflowNodes, capability: workflowOutputCapability(workflowNodes) };
+    }
+    const record = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : null;
+    const data = record?.data && typeof record.data === "object" && !Array.isArray(record.data) ? record.data as Record<string, unknown> : null;
+    const nodes = workflowNodeList(data?.prompt ?? payload);
+    const workflowNodes = parseRunningHubWorkflowNodes(payload);
+    const apiFieldKeys = nodes.flatMap((node) => Object.entries(node.inputs).flatMap(([name, value]) =>
+        value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? [`${node.id}.${name}`] : [],
+    ));
+    const apiFieldSet = new Set(apiFieldKeys);
+    const integratedH3 = nodes.find((node) => /MiniMaxH3IntegrationGH/i.test(node.classType));
+    const promptBinding = (integratedH3 && firstBinding([integratedH3], (node, field) => /^(prompt|prompt_override)$/i.test(field) && typeof node.inputs[field] === "string"))
+        || firstBinding(nodes, (node, field) => /^(prompt|prompt_override)$/i.test(field) && typeof node.inputs[field] === "string")
+        || firstBinding(nodes, (node, field) => /^(text|positive|description)$/i.test(field) && typeof node.inputs[field] === "string" && /(text|prompt|clip|encode)/i.test(node.classType));
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const linkedImageBindings = nodes.flatMap((consumer, consumerIndex) =>
         Object.entries(consumer.inputs).flatMap(([parameter, value], parameterIndex) => {
             if (!Array.isArray(value) || typeof value[0] !== "string") return [];
             const source = byId.get(value[0]);
             const fieldName = source && imageInputField(source);
-            if (!source || !fieldName || !/(image|load|reference|upload)/i.test(`${source.classType} ${parameter}`)) return [];
+            if (!source || !fieldName || !apiFieldSet.has(`${source.id}.${fieldName}`) || !/(image|load|reference|upload)/i.test(`${source.classType} ${parameter}`)) return [];
             return [{ nodeId: source.id, fieldName, sort: imageBindingOrder(parameter, consumerIndex * 100 + parameterIndex) }];
         }),
     )
         .sort((a, b) => a.sort - b.sort)
         .filter((binding, index, all) => all.findIndex((item) => item.nodeId === binding.nodeId && item.fieldName === binding.fieldName) === index)
         .map(({ nodeId, fieldName }) => ({ nodeId, fieldName }));
-    const imageBindings = linkedImageBindings.length
-        ? linkedImageBindings
-        : nodes
-              .flatMap((node) => (/(image|load|reference|upload)/i.test(node.classType) && imageInputField(node) ? [{ nodeId: node.id, fieldName: imageInputField(node)! }] : []))
-              .filter((binding, index, all) => all.findIndex((item) => item.nodeId === binding.nodeId && item.fieldName === binding.fieldName) === index);
+    const directMedia = (kind: "image" | "video" | "audio") => nodes.flatMap((node) => Object.entries(node.inputs).flatMap(([fieldName, value]) => {
+        if (value !== null && typeof value !== "string") return [];
+        const pattern = kind === "image" ? /^(?:image(?:_?\d+)?|image_?url|(?:input|source|reference|ref)_image(?:_?\d+)?|first_frame|last_frame)$/i
+            : kind === "video" ? /^(?:video(?:_?\d+)?|video_?url|(?:input|source|reference|ref)_video(?:_?\d+)?)$/i
+            : /^(?:audio(?:_?\d+)?|audio_?url|(?:input|source|reference|ref|drive|hybrid)_audio(?:_?\d+)?)$/i;
+        return pattern.test(fieldName) ? [{ nodeId: node.id, fieldName }] : [];
+    }));
+    const uniqueBindings = (bindings: RunningHubNodeBinding[]) => bindings.filter((item, index) => bindings.findIndex((other) => other.nodeId === item.nodeId && other.fieldName === item.fieldName) === index);
+    const imageBindings = uniqueBindings([...linkedImageBindings, ...directMedia("image")]);
     const mediaBindings = (kind: "video" | "audio") =>
         nodes
             .flatMap((consumer) =>
@@ -251,7 +308,7 @@ export function parseRunningHubWorkflowBindings(payload: unknown): WorkflowBindi
                     if (!new RegExp(`ref_${kind}s?\\.|${kind}s?[_\\d]`, "i").test(parameter) || !Array.isArray(value) || typeof value[0] !== "string") return [];
                     const source = byId.get(value[0]);
                     const fieldName = source && mediaInputField(source, kind);
-                    return source && fieldName ? [{ nodeId: source.id, fieldName }] : [];
+                    return source && fieldName && apiFieldSet.has(`${source.id}.${fieldName}`) ? [{ nodeId: source.id, fieldName }] : [];
                 }),
             )
             .filter((binding, index, all) => all.findIndex((item) => item.nodeId === binding.nodeId && item.fieldName === binding.fieldName) === index);
@@ -266,47 +323,64 @@ export function parseRunningHubWorkflowBindings(payload: unknown): WorkflowBindi
         };
         if (resolution) {
             add(workflowField(resolution, "aspect_ratio", "画面比例", "text"));
-            add(workflowField(resolution, "megapixels", "画面像素（MP）", "number", undefined, 0.1));
+            add(workflowField(resolution, "megapixels", "画面像素（MP）", "number"));
         }
-        if (duration) add(workflowField(duration, "value", duration.title || "视频时长（秒）", "number", undefined, 1));
+        if (duration) add(workflowField(duration, "value", duration.title || "视频时长（秒）", "number"));
         add(workflowField(h3Node, "ref_image_size", "参考图尺寸", "text"));
         const sampler = nodes.find((node) => /KSamplerSelect/i.test(node.classType));
         if (sampler) add(workflowField(sampler, "sampler_name", sampler.title || "采样器", "text"));
         const seed = nodes.find((node) => /RandomNoise/i.test(node.classType));
-        if (seed) add(workflowField(seed, "noise_seed", seed.title || "随机种子", "number", undefined, 1));
+        if (seed) add(workflowField(seed, "noise_seed", seed.title || "随机种子", "number"));
         const secondPass = nodes.find((node) => /easy float/i.test(node.classType) && /二采|倍数/i.test(node.title));
-        if (secondPass) add(workflowField(secondPass, "value", secondPass.title, "number", undefined, 0.1));
+        if (secondPass) add(workflowField(secondPass, "value", secondPass.title, "number"));
     }
-    const videoBindings = mediaBindings("video");
-    const audioBindings = mediaBindings("audio");
-    return { promptBinding, imageBindings, videoBindings, audioBindings, workflowFields, workflowPreview: { imageSlots: imageBindings.length, videoSlots: videoBindings.length, audioSlots: audioBindings.length, secondPassFieldKey: workflowFields.find((item) => /二采/.test(item.label))?.key } };
+    const videoBindings = uniqueBindings([...mediaBindings("video"), ...directMedia("video")]);
+    const audioBindings = uniqueBindings([...mediaBindings("audio"), ...directMedia("audio")]);
+    const occupied = new Set([promptBinding, ...imageBindings, ...videoBindings, ...audioBindings].filter((item): item is RunningHubNodeBinding => Boolean(item)).map((item) => `${item.nodeId}.${item.fieldName}`));
+    const h3Labels: Record<string, string> = { main_mode: "生成模式", clip_name: "文本模型", video_vae_name: "视频 VAE", audio_vae_name: "音频 VAE", aspect: "画面比例", megapixels: "画面像素（MP）", duration_seconds: "视频时长（秒）", task_type: "任务类型", audio_mode: "音频模式", audio_denoise_strength: "音频降噪强度", drive_audio_ordinal: "驱动音频序号", strict_prompt_tags: "严格提示词标签", ref_image_size: "参考图尺寸" };
+    for (const node of nodes) for (const [fieldName, value] of Object.entries(node.inputs)) {
+        const key = `${node.id}.${fieldName}`;
+        if (occupied.has(key) || fieldName === "gh_state_json" || workflowFields.some((field) => field.key === key)) continue;
+        if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") continue;
+        const h3 = node.id === integratedH3?.id;
+        const type = typeof value === "boolean" ? "boolean" : typeof value === "number" ? "number" : "text";
+        workflowFields.push({ nodeId: node.id, fieldName, key, label: h3 ? h3Labels[fieldName] || fieldName : fieldName === "value" && node.title ? node.title : fieldName, type, defaultValue: value });
+    }
+    return { promptBinding, imageBindings, videoBindings, audioBindings, workflowFields, apiFieldKeys, workflowNodes, capability: workflowOutputCapability(workflowNodes), workflowPreview: { imageSlots: imageBindings.length, videoSlots: videoBindings.length, audioSlots: audioBindings.length, secondPassFieldKey: workflowFields.find((item) => /二采/.test(item.label))?.key } };
 }
 
-/** API-format 负责可执行字段，完整 workflow JSON 负责保留所有素材槽位与界面预览。 */
+/** API-format 是唯一可执行字段来源；完整 workflow JSON 只补充只读节点诊断。 */
 export function mergeRunningHubWorkflowBindings(api: WorkflowBindings, workflow: WorkflowBindings | null): WorkflowBindings {
     if (!workflow) return api;
-    const fields = [...workflow.workflowFields, ...api.workflowFields.filter((field) => !workflow.workflowFields.some((item) => item.key === field.key))];
-    const imageBindings = workflow.imageBindings.length >= api.imageBindings.length ? workflow.imageBindings : api.imageBindings;
-    const videoBindings = workflow.videoBindings.length >= api.videoBindings.length ? workflow.videoBindings : api.videoBindings;
-    const audioBindings = workflow.audioBindings.length >= api.audioBindings.length ? workflow.audioBindings : api.audioBindings;
     return {
-        promptBinding: api.promptBinding || workflow.promptBinding,
-        imageBindings,
-        videoBindings,
-        audioBindings,
-        workflowFields: fields,
-        workflowPreview: {
-            imageSlots: imageBindings.length,
-            videoSlots: videoBindings.length,
-            audioSlots: audioBindings.length,
-            secondPassFieldKey: fields.find((field) => /二采/.test(field.label))?.key,
-        },
+        promptBinding: api.promptBinding,
+        imageBindings: api.imageBindings,
+        videoBindings: api.videoBindings,
+        audioBindings: api.audioBindings,
+        workflowFields: api.workflowFields,
+        apiFieldKeys: api.apiFieldKeys,
+        capability: api.capability,
+        workflowNodes: (workflow.workflowNodes?.length || 0) >= (api.workflowNodes?.length || 0) ? workflow.workflowNodes : api.workflowNodes,
+        workflowPreview: api.workflowPreview,
     };
 }
 
 export function runningHubWorkflowId(value: string) {
-    const detailId = value.match(/api-detail\/(\d{12,})/i)?.[1];
-    return detailId || value.match(/\d{12,}/)?.[0] || "";
+    const source = value.trim();
+    if (/^\d{12,}$/.test(source)) return source;
+    try {
+        const url = new URL(source);
+        const host = url.hostname.toLowerCase().replace(/^www\./, "");
+        if (host !== "runninghub.cn" && host !== "runninghub.ai") return "";
+        const path = url.pathname.replace(/^\/[a-z]{2}(?:-[a-z]{2})?(?=\/)/i, "");
+        const workflowId = path.match(/^\/workflow\/(\d{12,})\/?$/i)?.[1];
+        const postId = path.match(/^\/post\/(\d{12,})\/?$/i)?.[1];
+        const apiId = path.match(/^\/call-api\/api-detail\/(\d{12,})\/?$/i)?.[1];
+        const apiType = url.searchParams.get("apiType");
+        return workflowId || postId || (apiType === null || apiType === "5" ? apiId || "" : "");
+    } catch {
+        return "";
+    }
 }
 
 /** AI 应用只接受其详情页、API 手册或数字 ID；工作流链接不能误导入为 AI 应用。 */
@@ -388,18 +462,17 @@ function appMediaKind(field: RawRunningHubAppField) {
         if (field[`${kind}_upload`] === true || setting?.[`${kind}_upload`] === true) return kind;
     }
     const declared = `${field.fieldType || ""} ${field.valueType || ""}`.toLowerCase();
-    const name = String(field.fieldName || "").toLowerCase();
-    if (/image|picture|photo|mask/.test(declared) || /image|picture|photo|mask/.test(name)) return "image";
-    if (/video|movie/.test(declared) || /video|movie/.test(name)) return "video";
-    if (/audio|sound|voice|music/.test(declared) || /audio|sound|voice|music/.test(name)) return "audio";
+    if (/image|picture|photo|mask/.test(declared)) return "image";
+    if (/video|movie/.test(declared)) return "video";
+    if (/audio|sound|voice|music/.test(declared)) return "audio";
     return undefined;
 }
 
 function appFieldValue(field: RawRunningHubAppField, type: RunningHubWorkflowField["type"], options: Array<string | number>) {
     const raw = field.fieldValue ?? field.defaultValue ?? field.value;
     if (type === "boolean") return typeof raw === "boolean" ? raw : String(raw).toLowerCase() === "true";
-    if (type === "number") return Number.isFinite(Number(raw)) ? Number(raw) : 0;
-    if (type === "select") return options.find((option) => String(option) === String(raw)) ?? options[0] ?? "";
+    if (type === "number") return (typeof raw === "number" || typeof raw === "string") && Number.isFinite(Number(raw)) ? raw : "";
+    if (type === "select") return options.find((option) => String(option) === String(raw)) ?? (typeof raw === "string" || typeof raw === "number" ? raw : "");
     return typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
 }
 
@@ -468,10 +541,12 @@ export function parseRunningHubAiApp(payload: unknown, appId: string): RunningHu
         const min = Number(field.min ?? (appFieldSettings(field) as Record<string, unknown> | undefined)?.min);
         const max = Number(field.max ?? (appFieldSettings(field) as Record<string, unknown> | undefined)?.max);
         const step = Number(field.step ?? (appFieldSettings(field) as Record<string, unknown> | undefined)?.step);
+        const description = typeof field.description === "string" && field.description.trim() ? field.description : typeof field.descriptionEn === "string" && field.descriptionEn.trim() ? field.descriptionEn : undefined;
         workflowFields.push({
             ...binding,
             key: identity,
             label: String(field.label || field.name || field.description || fieldName).trim().slice(0, 120) || fieldName,
+            ...(description ? { description } : {}),
             type,
             defaultValue: value,
             ...(options.length ? { options } : {}),
@@ -500,14 +575,6 @@ export function parseRunningHubAiApp(payload: unknown, appId: string): RunningHu
 
 /** 已经保存到本地的旧版 H3 导入项没有字段快照；用其已发布 API 的真实节点恢复设置面板。 */
 export function defaultRunningHubWorkflowFields(target: string): RunningHubWorkflowField[] {
-    if (target === "2086579374731649025") {
-        return [
-            { nodeId: "130", fieldName: "aspect", key: "130.aspect", label: "画面比例", type: "select", defaultValue: "adaptive", options: ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] },
-            { nodeId: "130", fieldName: "megapixels", key: "130.megapixels", label: "画面像素（MP）", type: "number", defaultValue: 1, step: 0.1 },
-            { nodeId: "130", fieldName: "duration_seconds", key: "130.duration_seconds", label: "视频时长（秒）", type: "number", defaultValue: 7, step: 1 },
-            { nodeId: "130", fieldName: "ref_image_size", key: "130.ref_image_size", label: "参考图尺寸", type: "select", defaultValue: "match", options: ["match", "max", "min"] },
-        ];
-    }
     if (target !== "2092878871120142337") return [];
     return [
         { nodeId: "252", fieldName: "aspect_ratio", key: "252.aspect_ratio", label: "画面比例", type: "text", defaultValue: "16:9 (Widescreen)" },
@@ -535,21 +602,6 @@ export function defaultRunningHubAiAppFields(target: string): RunningHubWorkflow
     }];
 }
 
-function defaultRunningHubWorkflowBindings(target: string): WorkflowBindings | null {
-    if (target !== "2086579374731649025") return null;
-    const imageBindings = ["first_frame", "last_frame", ...Array.from({ length: 9 }, (_, index) => `ref_image_${index + 1}`)].map((fieldName) => ({ nodeId: "130", fieldName }));
-    const videoBindings = Array.from({ length: 3 }, (_, index) => ({ nodeId: "130", fieldName: `ref_video_${index + 1}` }));
-    const audioBindings = Array.from({ length: 3 }, (_, index) => ({ nodeId: "130", fieldName: `ref_audio_${index + 1}` }));
-    return {
-        promptBinding: { nodeId: "130", fieldName: "prompt" },
-        imageBindings,
-        videoBindings,
-        audioBindings,
-        workflowFields: defaultRunningHubWorkflowFields(target),
-        workflowPreview: { imageSlots: imageBindings.length, videoSlots: videoBindings.length, audioSlots: audioBindings.length },
-    };
-}
-
 function runningHubTaskScript(resource: RunningHubResource, capability: "image" | "video" | "audio") {
     const resourceJson = JSON.stringify(resource);
     const imageField = capability === "video" ? "firstFrameUrl" : "imageUrls";
@@ -567,13 +619,13 @@ function runningHubTaskScript(resource: RunningHubResource, capability: "image" 
 const local = globalThis.location.origin;
 const imageAspectRatio = ({ "1024x1024": "1:1", "1024x1536": "2:3", "1536x1024": "3:2", "1024x1365": "3:4", "1365x1024": "4:3", "1024x1792": "9:16", "1792x1024": "16:9" })[params.size] || "1:1";
 const upload = async (dataUrl, index) => {
-  const uploaded = await request({ method: "post", url: local + "/api/runninghub/upload", headers: { "Content-Type": "application/json" }, data: { apiKey, dataUrl, fileName: "reference-" + (index + 1) + ".png" } });
+  const uploaded = await request({ method: "post", url: local + "/api/runninghub/upload", headers: { "Content-Type": "application/json" }, data: { apiKey, baseUrl, dataUrl, fileName: "reference-" + (index + 1) + ".png" } });
   const url = uploaded.download_url || uploaded.data?.download_url || uploaded.url || uploaded.data?.url;
   if (!url) throw new Error("RunningHub 未返回已上传图片地址");
   return url;
 };
 const imageUrls = await Promise.all(images.map(upload));
-const task = await request({ method: "post", url: local + "/api/runninghub/task", headers: { "Content-Type": "application/json" }, data: { apiKey, kind: resource.kind, target: resource.target, body: ${standardBody} } });
+const task = await request({ method: "post", url: local + "/api/runninghub/task", headers: { "Content-Type": "application/json" }, data: { apiKey, baseUrl, kind: resource.kind, target: resource.target, body: ${standardBody} } });
 const taskId = task.taskId || task.data?.taskId;
 if (!taskId) throw new Error(task.errorMessage || task.message || "RunningHub 未返回任务 ID");
 const collectUrls = (value, urls = []) => {
@@ -583,7 +635,7 @@ const collectUrls = (value, urls = []) => {
   return [...new Set(urls)];
 };
 return await poll(
-  () => request({ method: "post", url: local + "/api/runninghub/query", headers: { "Content-Type": "application/json" }, data: { apiKey, taskId, keyType: resource.kind === "standard" ? "enterprise" : "consumer" } }),
+  () => request({ method: "post", url: local + "/api/runninghub/query", headers: { "Content-Type": "application/json" }, data: { apiKey, baseUrl, taskId, keyType: resource.kind === "standard" ? "enterprise" : "consumer" } }),
   (state) => {
     const status = String(state.status || state.data?.status || "").toUpperCase();
     if (status === "FAILED" || status === "ERROR" || status === "CANCELLED") throw new Error(state.errorMessage || state.data?.errorMessage || state.message || "RunningHub 任务失败");
@@ -601,11 +653,76 @@ export function createRunningHubStandardModel(name: string, capability: Extract<
 }
 
 export function runningHubWorkflowScript(resource: RunningHubResource) {
-    const resourceJson = JSON.stringify(resource);
+    const target = resource.kind === "workflow" ? canonicalRunningHubWorkflowId(resource.target) : resource.target;
+    const resourceJson = JSON.stringify({ ...resource, target, workflowNodes: undefined });
+    const integratedH3NodeId = resource.workflowNodes?.find((node) => /MiniMaxH3IntegrationGH/i.test(node.classType) && resource.apiFieldKeys?.includes(`${node.id}.gh_state_json`))?.id || "";
+    const requiresRefresh = resource.kind === "workflow" && !Array.isArray(resource.apiFieldKeys);
     return `const resource = ${resourceJson};
+const integratedH3NodeId = ${JSON.stringify(integratedH3NodeId)};
+const mappingError = (message) => {
+  const error = new Error(message);
+  error.diagnostics = { stage: "提交前检查", workflowId: resource.target, status: "NOT_SUBMITTED" };
+  throw error;
+};
+if (${JSON.stringify(requiresRefresh)}) mappingError("当前工作流卡片尚未核对 API 字段；请打开‘映射’点击‘刷新映射’后再运行，避免无效提交。");
+const apiFieldKeys = new Set(resource.apiFieldKeys || []);
+const requireApiBinding = (binding) => {
+  if (resource.kind === "workflow" && binding && !apiFieldKeys.has(binding.nodeId + "." + binding.fieldName)) mappingError("工作流素材或提示词槽位不在当前 API 中；请刷新映射并重新连接该槽位。");
+};
+const imageBindings = params.runningHubWorkflowBindings?.image || (resource.imageBindings?.length ? resource.imageBindings : resource.imageBinding ? [resource.imageBinding] : []);
+const videoBindings = params.runningHubWorkflowBindings?.video || resource.videoBindings || [];
+const audioBindings = params.runningHubWorkflowBindings?.audio || resource.audioBindings || [];
+if (prompt) requireApiBinding(resource.promptBinding);
+[...imageBindings, ...videoBindings, ...audioBindings].forEach(requireApiBinding);
+for (const field of resource.workflowFields || []) {
+  if (Object.prototype.hasOwnProperty.call(params.workflowValues || {}, field.key)) requireApiBinding(field);
+}
 const local = globalThis.location.origin;
+const rhFailure = (value) => {
+  const payload = value?.data || value || {};
+  let failure = payload.failedReason || value?.failedReason;
+  if (typeof failure === "string") { try { failure = JSON.parse(failure); } catch { return { exception_message: failure }; } }
+  if (failure && typeof failure === "object") return failure;
+  let tips = payload.promptTips || value?.promptTips;
+  if (typeof tips === "string") { try { tips = JSON.parse(tips); } catch { tips = undefined; } }
+  const node = Object.entries(tips?.node_errors || {})[0];
+  if (!node) return {};
+  const errors = Array.isArray(node[1]?.errors) ? node[1].errors : [];
+  return { node_id: node[0], node_type: node[1]?.class_type, exception_type: errors[0]?.type,
+    exception_message: errors.flatMap((error) => [error.message, error.details].filter((text) => typeof text === "string")).join("；") };
+};
+const rhErrorText = (value) => {
+  if (typeof value === "string") {
+    try { const parsed = JSON.parse(value); if (parsed && typeof parsed === "object") return rhErrorText(parsed); } catch {}
+    return (apiKey ? value.replaceAll(apiKey, "[已隐藏]") : value).slice(0, 300);
+  }
+  if (!value || typeof value !== "object") return "";
+  return rhErrorText(rhFailure(value).exception_message) || rhErrorText(value.failedReason) || rhErrorText(value.exception_message) || rhErrorText(value.data) || rhErrorText(value.errorMessage) || rhErrorText(value.msg) || rhErrorText(value.message) || rhErrorText(value.error) || rhErrorText(value.detail);
+};
+let rhTaskId = "";
+const rhError = (stage, value, message, httpStatus) => {
+  const payload = value?.data || value || {};
+  const failure = rhFailure(value);
+  const error = new Error(message);
+  error.diagnostics = {
+    stage, workflowId: resource.target, taskId: payload.taskId || value?.taskId || rhTaskId,
+    status: payload.status || value?.status, httpStatus, errorCode: payload.errorCode || payload.code || value?.errorCode,
+    nodeId: failure?.node_id, nodeType: failure?.node_type, exceptionType: failure?.exception_type,
+    exceptionMessage: rhErrorText(failure?.exception_message),
+  };
+  return error;
+};
+const rhRequest = async (stage, config) => {
+  try { return await request(config); }
+  catch (error) {
+    const status = Number(error?.response?.status);
+    const reason = rhErrorText(error?.response?.data) || rhErrorText(error) || "请求失败";
+    if (error?.name === "AbortError" || error?.code === "ERR_CANCELED") throw error;
+    throw rhError(stage, error?.response?.data, "RunningHub " + stage + (Number.isInteger(status) && status > 0 ? "（HTTP " + status + "）" : "") + "：" + reason, Number.isInteger(status) ? status : undefined);
+  }
+};
 const uploadMedia = async (dataUrl, fileName) => {
-  const uploaded = await request({ method: "post", url: local + "/api/runninghub/upload", headers: { "Content-Type": "application/json" }, data: { apiKey, dataUrl, fileName } });
+  const uploaded = await rhRequest("上传素材", { method: "post", url: local + "/api/runninghub/upload", headers: { "Content-Type": "application/json" }, data: { apiKey, baseUrl, dataUrl, fileName } });
   const fileNameResult = uploaded.fileName || uploaded.data?.fileName || uploaded.filename || uploaded.data?.filename;
   if (!fileNameResult) throw new Error(uploaded.message || uploaded.msg || "RunningHub 未返回上传文件路径");
   return fileNameResult;
@@ -615,54 +732,49 @@ const uploadedVideos = await Promise.all((params.referenceVideos || []).map((dat
 const uploadedAudios = await Promise.all((params.referenceAudios || []).map((dataUrl, index) => uploadMedia(dataUrl, "reference-audio-" + (index + 1) + ".mp3")));
 const nodeInfoList = [];
 if (resource.promptBinding && prompt) nodeInfoList.push({ nodeId: resource.promptBinding.nodeId, fieldName: resource.promptBinding.fieldName, fieldValue: prompt });
-const imageBindings = params.runningHubWorkflowBindings?.image || (resource.imageBindings?.length ? resource.imageBindings : resource.imageBinding ? [resource.imageBinding] : []);
 const frameBindings = imageBindings.filter((binding) => /^(first_frame|last_frame)$/i.test(binding.fieldName));
-const referenceImageBindings = imageBindings.filter((binding) => /^ref_image_\\d+$/i.test(binding.fieldName));
-const frameMode = params.videoMode !== "reference" && uploadedImages.length <= 2;
-const frameSlots = params.videoFrameSlots || {};
-const orderedImageBindings = frameMode && frameBindings.length
-  ? [frameSlots.first ? frameBindings.find((binding) => binding.fieldName === "first_frame") : undefined, frameSlots.last ? frameBindings.find((binding) => binding.fieldName === "last_frame") : undefined].filter(Boolean)
-  : referenceImageBindings.length ? referenceImageBindings : imageBindings;
-orderedImageBindings.forEach((binding, index) => {
+const requestedH3Mode = integratedH3NodeId ? (params.workflowValues || {})[integratedH3NodeId + ".main_mode"] : undefined;
+const h3Mode = requestedH3Mode === "all_reference" || requestedH3Mode === "text_keyframes" ? requestedH3Mode : params.videoMode === "reference" || !frameBindings.length ? "all_reference" : "text_keyframes";
+imageBindings.forEach((binding, index) => {
   const fileName = uploadedImages[index];
   if (fileName) nodeInfoList.push({ nodeId: binding.nodeId, fieldName: binding.fieldName, fieldValue: fileName });
 });
-const videoBindings = params.runningHubWorkflowBindings?.video || resource.videoBindings || [];
 videoBindings.forEach((binding, index) => {
   if (uploadedVideos[index]) nodeInfoList.push({ nodeId: binding.nodeId, fieldName: binding.fieldName, fieldValue: uploadedVideos[index] });
 });
-const audioBindings = params.runningHubWorkflowBindings?.audio || resource.audioBindings || [];
 audioBindings.forEach((binding, index) => {
   if (uploadedAudios[index]) nodeInfoList.push({ nodeId: binding.nodeId, fieldName: binding.fieldName, fieldValue: uploadedAudios[index] });
 });
-if (resource.target === "2086579374731649025") {
+if (integratedH3NodeId) {
   const media = [];
   const addStateMedia = (fieldName, fileName, kind) => {
     if (!fileName) return;
     media.push([fieldName, { name: fileName, kind, ...(kind === "audio" ? { trimStart: 0, trimEnd: null } : {}) }]);
   };
-  orderedImageBindings.forEach((binding, index) => addStateMedia(binding.fieldName, uploadedImages[index], "image"));
+  imageBindings.forEach((binding, index) => addStateMedia(binding.fieldName, uploadedImages[index], "image"));
   videoBindings.forEach((binding, index) => addStateMedia(binding.fieldName, uploadedVideos[index], "video"));
   audioBindings.forEach((binding, index) => addStateMedia(binding.fieldName, uploadedAudios[index], "audio"));
-  const mode = params.videoMode === "reference" ? "all_reference" : "text_keyframes";
-  nodeInfoList.push({ nodeId: "130", fieldName: "main_mode", fieldValue: mode });
+  const mode = h3Mode;
+  if (apiFieldKeys.has(integratedH3NodeId + ".main_mode")) nodeInfoList.push({ nodeId: integratedH3NodeId, fieldName: "main_mode", fieldValue: mode });
   nodeInfoList.push({
-    nodeId: "130",
+    nodeId: integratedH3NodeId,
     fieldName: "gh_state_json",
     fieldValue: JSON.stringify({ mode, media, prompt, prompts: { [mode]: prompt, ...(mode === "text_keyframes" ? { all_reference: "" } : {}) }, advanced: false }),
   });
 }
 for (const field of resource.workflowFields || []) {
+  if (integratedH3NodeId && field.nodeId === integratedH3NodeId && field.fieldName === "main_mode") continue;
   const hasOverride = Object.prototype.hasOwnProperty.call(params.workflowValues || {}, field.key);
   const value = hasOverride ? params.workflowValues[field.key] : resource.kind === "app" ? field.defaultValue : undefined;
-  if (value !== undefined && value !== null && value !== "") nodeInfoList.push({ nodeId: field.nodeId, fieldName: field.fieldName, fieldValue: value });
+  if (value !== undefined && value !== null) nodeInfoList.push({ nodeId: field.nodeId, fieldName: field.fieldName, fieldValue: value });
 }
 const rawRunOptions = params.runningHubWorkflowRunOptions || {};
 const instanceType = ["default", "plus", "ultra"].includes(rawRunOptions.instanceType) ? rawRunOptions.instanceType : "default";
 const retainSeconds = Number(rawRunOptions.retainSeconds);
 const webhookUrl = String(rawRunOptions.webhookUrl || "").trim();
-const task = await request({ method: "post", url: local + "/api/runninghub/task", headers: { "Content-Type": "application/json" }, data: {
+const task = await rhRequest("提交任务", { method: "post", url: local + "/api/runninghub/task", headers: { "Content-Type": "application/json" }, data: {
   apiKey,
+  baseUrl,
   kind: resource.kind,
   target: resource.target,
   nodeInfoList,
@@ -673,41 +785,71 @@ const task = await request({ method: "post", url: local + "/api/runninghub/task"
   ...(webhookUrl && /^https?:\\/\\//i.test(webhookUrl) ? { webhookUrl } : {}),
 } });
 const taskId = task.taskId || task.data?.taskId;
-if (!taskId) throw new Error(task.errorMessage || task.message || task.msg || "RunningHub 未返回任务 ID");
+const taskStatus = String(task.status || task.data?.status || "").toUpperCase();
+if (taskStatus === "FAILED" || taskStatus === "ERROR" || taskStatus === "CANCELLED") throw rhError("提交任务", task, "RunningHub 提交任务失败：" + (rhErrorText(task) || taskStatus));
+if (!taskId) throw rhError("提交任务", task, rhErrorText(task) || "RunningHub 未返回任务 ID");
+rhTaskId = taskId;
 const collectUrls = (value, urls = []) => {
   if (typeof value === "string" && /^https?:/i.test(value)) urls.push(value);
   else if (Array.isArray(value)) value.forEach((item) => collectUrls(item, urls));
   else if (value && typeof value === "object") Object.entries(value).forEach(([key, item]) => { if (/url|file|image|video|audio|result/i.test(key)) collectUrls(item, urls); });
   return [...new Set(urls)];
 };
-return await poll(
-  () => request({ method: "post", url: local + "/api/runninghub/query", headers: { "Content-Type": "application/json" }, data: { apiKey, taskId, keyType: "consumer" } }),
+try { return await poll(
+  () => rhRequest("查询任务", { method: "post", url: local + "/api/runninghub/query", headers: { "Content-Type": "application/json" }, data: { apiKey, baseUrl, taskId, keyType: "consumer" } }),
   (state) => {
     const status = String(state.status || state.data?.status || "").toUpperCase();
-    if (status === "FAILED" || status === "ERROR" || status === "CANCELLED") throw new Error(state.errorMessage || state.data?.errorMessage || state.message || "RunningHub 任务失败");
+    if (status === "FAILED" || status === "ERROR" || status === "CANCELLED") throw rhError("任务执行", state, "RunningHub 工作流运行失败：" + (rhErrorText(state) || status));
     if (status !== "SUCCESS" && status !== "COMPLETED") return null;
-    const urls = collectUrls(state.results || state.data?.results || state);
-    return urls.length ? urls : null;
+    const urls = collectUrls(state.results || state.data?.results || []);
+    if (!urls.length) throw rhError("任务结果", state, "RunningHub 任务成功但未返回输出文件；请在 RH 核对输出节点和任务结果。");
+    return urls;
   },
   { intervalMs: 2500, timeoutMs: 300000 },
-);`;
+); } catch (error) {
+  if (error?.diagnostics || error?.name === "AbortError" || error?.code === "ERR_CANCELED") throw error;
+  throw rhError("查询任务", {}, rhErrorText(error) || "RunningHub 查询任务失败");
+}`;
 }
 
 export function createRunningHubWorkflowModel(target: string, bindings: WorkflowBindings, name = `工作流 ${target}`, title = name): ChannelModel {
-    const knownWorkflow = defaultRunningHubWorkflowBindings(target);
-    const resolvedBindings = knownWorkflow ? mergeRunningHubWorkflowBindings(knownWorkflow, bindings) : bindings;
     const runningHub: RunningHubResource = {
         kind: "workflow",
-        target,
+        target: canonicalRunningHubWorkflowId(target),
         title: title.trim() || name,
-        promptBinding: resolvedBindings.promptBinding,
-        imageBindings: resolvedBindings.imageBindings,
-        videoBindings: resolvedBindings.videoBindings,
-        audioBindings: resolvedBindings.audioBindings,
-        workflowFields: [...resolvedBindings.workflowFields, ...defaultRunningHubWorkflowFields(target).filter((fallback) => !resolvedBindings.workflowFields.some((field) => field.key === fallback.key))],
-        workflowPreview: resolvedBindings.workflowPreview,
+        promptBinding: bindings.promptBinding,
+        imageBindings: bindings.imageBindings,
+        videoBindings: bindings.videoBindings,
+        audioBindings: bindings.audioBindings,
+        workflowFields: bindings.workflowFields,
+        workflowPreview: bindings.workflowPreview,
+        workflowNodes: bindings.workflowNodes,
+        apiFieldKeys: bindings.apiFieldKeys,
     };
-    return { name, capability: "video", runningHub, script: runningHubWorkflowScript(runningHub) };
+    const capability = bindings.capability || workflowOutputCapability(bindings.workflowNodes || []) || "video";
+    return { name, capability, runningHub, script: runningHubWorkflowScript(runningHub) };
+}
+
+/** 用最新 API 格式补全已保存的卡片；保留原有素材槽和自定义显示名称。 */
+export function refreshRunningHubWorkflowModel(model: ChannelModel, payload: unknown, target = model.runningHub?.target || ""): ChannelModel {
+    const resource = model.runningHub;
+    if (resource?.kind !== "workflow") throw new Error("当前模型不是 RunningHub 工作流");
+    const api = parseRunningHubWorkflowBindings(payload);
+    if (!api.workflowNodes?.length) throw new Error("RunningHub 未返回可识别的工作流节点");
+    const saved: WorkflowBindings = {
+        promptBinding: resource.promptBinding,
+        imageBindings: resource.imageBindings || (resource.imageBinding ? [resource.imageBinding] : []),
+        videoBindings: resource.videoBindings || [],
+        audioBindings: resource.audioBindings || [],
+        workflowFields: resource.workflowFields || [],
+        workflowNodes: resource.workflowNodes,
+        apiFieldKeys: resource.apiFieldKeys,
+        workflowPreview: resource.workflowPreview || { imageSlots: 0, videoSlots: 0, audioSlots: 0 },
+    };
+    const merged = mergeRunningHubWorkflowBindings(api, saved);
+    if (!/^\d{12,}$/.test(target)) throw new Error("请输入有效的 RunningHub 工作流 ID");
+    const updated: RunningHubResource = { ...resource, ...merged, target };
+    return { ...model, capability: api.capability || model.capability, runningHub: updated, script: runningHubWorkflowScript(updated) };
 }
 
 export function createRunningHubAiAppModel(app: RunningHubAiAppImport, name = app.name): ChannelModel {
