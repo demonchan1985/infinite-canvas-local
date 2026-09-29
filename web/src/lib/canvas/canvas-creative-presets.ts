@@ -1,5 +1,6 @@
 import aifisherCreativeCatalog from "./aifisher-creative-catalog.json" with { type: "json" };
 import aifisherMjStyleCatalog from "./aifisher-mj-style-catalog.json" with { type: "json" };
+import hairMakeoverCatalog from "./hair-makeover-catalog.json" with { type: "json" };
 import type { CanvasCreativePreset, CanvasCreativePresetKind, CanvasCreativePresetSelection, CanvasGenerationMode } from "@/types/canvas";
 
 export type { CanvasCreativePreset, CanvasCreativePresetKind, CanvasCreativePresetSelection } from "@/types/canvas";
@@ -37,10 +38,10 @@ export const mjInsertModes: ReadonlyArray<{ value: MjInsertMode; label: string }
     { value: "vibe", label: "色调描述" },
 ];
 
-const imageCreativeKinds: CanvasCreativePresetKind[] = ["style", "mj", "filter"];
+const imageCreativeKinds: CanvasCreativePresetKind[] = ["style", "mj", "filter", "hairstyle", "haircolor"];
 const videoCreativeKinds: CanvasCreativePresetKind[] = ["style", "motion", "filter"];
-const creativeKinds = new Set<CanvasCreativePresetKind>(["style", "motion", "filter"]);
-const directCatalog = (aifisherCreativeCatalog as unknown as CanvasCreativePreset[]).filter((preset) => creativeKinds.has(preset.kind));
+const creativeKinds = new Set<CanvasCreativePresetKind>(["style", "motion", "filter", "hairstyle", "haircolor"]);
+const directCatalog = ([...aifisherCreativeCatalog, ...hairMakeoverCatalog] as unknown as CanvasCreativePreset[]).filter((preset) => creativeKinds.has(preset.kind));
 const mjCatalog = aifisherMjStyleCatalog as unknown as AifisherMjStyle[];
 
 export function creativePresetKindsForMode(mode: CanvasGenerationMode): CanvasCreativePresetKind[] {
@@ -50,7 +51,8 @@ export function creativePresetKindsForMode(mode: CanvasGenerationMode): CanvasCr
 }
 
 export function canvasCreativePresetsForKind(kind: Exclude<CanvasCreativePresetKind, "mj">) {
-    return directCatalog.filter((preset) => preset.kind === kind);
+    const presets = directCatalog.filter((preset) => preset.kind === kind);
+    return kind === "hairstyle" ? presets.sort((a, b) => Number(Boolean(b.preview)) - Number(Boolean(a.preview))) : presets;
 }
 
 export function aifisherMjStyles() {
@@ -129,8 +131,14 @@ export function normalizeMidjourneyPrompt(value: string) {
 
 export function composeCanvasCreativePrompt(prompt: string, selection: CanvasCreativePresetSelection | undefined, mode: CanvasGenerationMode) {
     const resolved = normalizeCanvasCreativeSelection(selection, mode);
-    const order: CanvasCreativePresetKind[] = mode === "image" ? ["style", "filter", "mj"] : mode === "video" ? ["style", "motion", "filter"] : [];
-    const parts = [...order.map((kind) => resolved[kind]?.prefix || ""), prompt.trim(), ...order.map((kind) => resolved[kind]?.prompt || "")].filter(Boolean);
+    const order: CanvasCreativePresetKind[] = mode === "image" ? ["style", "filter", "hairstyle", "haircolor", "mj"] : mode === "video" ? ["style", "motion", "filter"] : [];
+    const hairConstraint = resolved.hairstyle && !resolved.haircolor ? "只更换发型，保留人物参考图的原有发色。" : resolved.haircolor && !resolved.hairstyle ? "只更换发色，保留人物参考图的发长、分缝、刘海、卷度和轮廓。" : "";
+    const parts = [...order.map((kind) => resolved[kind]?.prefix || ""), prompt.trim(), hairConstraint, ...order.map((kind) => resolved[kind]?.prompt || "")].filter(Boolean);
     const composed = parts.filter((part, index) => parts.indexOf(part) === index).join("\n");
     return mode === "image" && resolved.mj ? normalizeMidjourneyPrompt(composed) : composed;
+}
+
+export function canvasHairReferenceError(selection: CanvasCreativePresetSelection | undefined, mode: CanvasGenerationMode, referenceCount: number) {
+    const resolved = normalizeCanvasCreativeSelection(selection, mode);
+    return (resolved.hairstyle || resolved.haircolor) && !referenceCount ? "换发型或发色需要人物参考图，请先连接或选中人物图片。" : undefined;
 }

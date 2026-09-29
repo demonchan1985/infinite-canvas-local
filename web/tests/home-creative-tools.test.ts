@@ -83,8 +83,8 @@ test("正式 Logo 在顶栏以更大的粗体轮廓显示", () => {
     assert.match(appTopNavSource, /className="size-7 shrink-0 bg-current"/);
 });
 
-test("图片节点提供风格、MJ 码图和滤镜；视频节点提供风格、运镜和滤镜", () => {
-    assert.deepEqual(creativePresetKindsForMode("image"), ["style", "mj", "filter"]);
+test("图片节点增加换发型和换发色；视频节点保留风格、运镜和滤镜", () => {
+    assert.deepEqual(creativePresetKindsForMode("image"), ["style", "mj", "filter", "hairstyle", "haircolor"]);
     assert.deepEqual(creativePresetKindsForMode("video"), ["style", "motion", "filter"]);
     assert.match(canvasPromptPanelSource, /CanvasCreativeTools/);
     assert.doesNotMatch(canvasPromptPanelSource, /CanvasPromptLibrary/);

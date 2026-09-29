@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { nanoid } from "nanoid";
 
 type ErrorContext = { projectId: string; nodeId: string; nodeName?: string; model?: string; stage?: string };
-export type CanvasErrorLogEntry = ErrorContext & { id: string; timestamp: string; message: string; diagnostics?: Record<string, string> };
+export type CanvasErrorLogEntry = ErrorContext & { id: string; timestamp: string; status: "success" | "error"; message: string; resultCount?: number; diagnostics?: Record<string, string> };
 
 const diagnosticFields = ["stage", "taskId", "workflowId", "status", "httpStatus", "errorCode", "nodeId", "nodeType", "exceptionType", "exceptionMessage"];
 
@@ -30,7 +30,7 @@ function createEntry(error: unknown, context: ErrorContext, sensitiveValues: str
         cause = item.cause;
     }
     return {
-        id: nanoid(), timestamp: new Date().toISOString(), projectId: context.projectId, nodeId: context.nodeId,
+        id: nanoid(), timestamp: new Date().toISOString(), status: "error", projectId: context.projectId, nodeId: context.nodeId,
         nodeName: context.nodeName ? redact(context.nodeName, sensitiveValues) : undefined,
         model: context.model ? redact(context.model, sensitiveValues) : undefined,
         stage: diagnostics.stage || context.stage || "生成",
@@ -47,6 +47,7 @@ export function formatCanvasErrorLogs(entries: CanvasErrorLogEntry[]) {
 export const useCanvasErrorLogStore = create<{
     entries: CanvasErrorLogEntry[];
     record: (error: unknown, context: ErrorContext, sensitiveValues?: string[]) => void;
+    recordSuccess: (context: ErrorContext, resultCount: number) => void;
     clear: (projectId?: string) => void;
 }>((set) => ({
     entries: [],
@@ -55,6 +56,13 @@ export const useCanvasErrorLogStore = create<{
         if (canceled?.name === "AbortError" || canceled?.name === "CanceledError" || canceled?.code === "ERR_CANCELED") return;
         const entry = createEntry(error, context, sensitiveValues);
         set((state) => ({ entries: [entry, ...state.entries] }));
+    },
+    recordSuccess: (context, resultCount) => {
+        if (resultCount <= 0) return;
+        set((state) => ({ entries: [{
+            id: nanoid(), timestamp: new Date().toISOString(), status: "success", projectId: context.projectId, nodeId: context.nodeId,
+            model: context.model, stage: context.stage || "生成", resultCount, message: `已写入 ${resultCount} 项结果`,
+        }, ...state.entries] }));
     },
     clear: (projectId) => set((state) => ({ entries: projectId ? state.entries.filter((entry) => entry.projectId !== projectId) : [] })),
 }));

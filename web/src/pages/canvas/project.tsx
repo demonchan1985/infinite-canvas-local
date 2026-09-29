@@ -101,7 +101,7 @@ import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
 import { RunningHubWorkflowImportModal } from "@/components/layout/runninghub-workflow-import-modal";
 import { ConnectionCreateMenu, NodeCreateMenu, type ConnectionCreateRequest, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
 import { canvasDroppedMediaFiles, normalizeCanvasDroppedFile } from "@/lib/canvas/canvas-drop-files";
-import { composeCanvasCreativePrompt } from "@/lib/canvas/canvas-creative-presets";
+import { canvasHairReferenceError, composeCanvasCreativePrompt } from "@/lib/canvas/canvas-creative-presets";
 import { mergeTextNodeImportedContent, normalizeCanvasTextTags } from "@/lib/canvas/canvas-text-node-import";
 import { findSeedVrUpscaleModel, RUNNING_HUB_SEEDVR_DEFAULT_PIXEL, RUNNING_HUB_SEEDVR_PIXEL_FIELD_KEY, seedVrUpscaleImageBindings, seedVrUpscalePixelField } from "@/lib/runninghub-model";
 import {
@@ -554,6 +554,7 @@ function InfiniteCanvasPage() {
                             : item,
                     ),
                 );
+                useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId: node.id, model: generationConfig.model, stage: "继续生成" }, 1);
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
@@ -2580,6 +2581,7 @@ function InfiniteCanvasPage() {
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId: childId, model: generationConfig.model, stage: "蒙版编辑" }, 1);
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.maskFailed");
@@ -2704,6 +2706,7 @@ function InfiniteCanvasPage() {
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitImageNodeSize(uploaded.width, uploaded.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId: childId, model: generationConfig.model, stage: "高清放大" }, 1);
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.seedVrUpscaleFailed");
@@ -2756,6 +2759,7 @@ function InfiniteCanvasPage() {
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitImageNodeSize(uploaded.width, uploaded.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId: childId, model: generationConfig.model, stage: "角度生成" }, 1);
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
@@ -2810,6 +2814,7 @@ function InfiniteCanvasPage() {
                 const uploaded = await uploadImage(image.dataUrl, { signal: controller.signal });
                 const size = fitImageNodeSize(uploaded.width, uploaded.height);
                 setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId: childId, model: generationConfig.model, stage: "人物调整" }, 1);
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : t("canvas.projectPage.generationFailed");
@@ -3016,6 +3021,7 @@ function InfiniteCanvasPage() {
             let generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             const sensitiveValues = [generationConfig.apiKey, generationConfig.systemPrompt, prompt, ...generationConfig.channels.flatMap((channel) => [channel.apiKey, channel.consumerApiKey || ""])];
             const recordGenerationError = (error: unknown) => useCanvasErrorLogStore.getState().record(error, { projectId, nodeId, nodeName: sourceNode?.title, model: generationConfig.model }, sensitiveValues);
+            const recordGenerationSuccess = (resultCount: number) => useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId, model: generationConfig.model }, resultCount);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
@@ -3036,6 +3042,8 @@ function InfiniteCanvasPage() {
                     const enhancedContext = { ...context, prompt: composeCanvasCreativePrompt(context.prompt, sourceNode.metadata?.creativePresets, mode) };
                     sensitiveValues.push(enhancedContext.prompt);
                     const refs = enhancedContext.referenceImages;
+                    const hairError = canvasHairReferenceError(sourceNode.metadata?.creativePresets, mode, refs.length);
+                    if (hairError) throw new Error(hairError);
                     const image = refs.length
                         ? await requestEdit({ ...generationConfig, count: "1" }, enhancedContext.prompt, refs, { signal: controller.signal }).then((items) => items[0])
                         : await requestGeneration({ ...generationConfig, count: "1" }, enhancedContext.prompt, { signal: controller.signal }).then((items) => items[0]);
@@ -3043,6 +3051,7 @@ function InfiniteCanvasPage() {
                     setNodes((prev) =>
                         prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
                     );
+                    recordGenerationSuccess(1);
                     setDialogNodeId(null);
                 } catch (error) {
                     if (!isGenerationCanceled(error)) {
@@ -3082,6 +3091,13 @@ function InfiniteCanvasPage() {
                     : buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, initialPrompt),
             );
             const generationContext = { ...rawGenerationContext, prompt: composeCanvasCreativePrompt(rawGenerationContext.prompt, sourceNode?.metadata?.creativePresets, mode) };
+            const hairError = canvasHairReferenceError(sourceNode?.metadata?.creativePresets, mode, generationContext.referenceImages.length);
+            if (hairError) {
+                message.error(hairError);
+                finishGenerationRequest(nodeId, runController);
+                setRunningNodeId(null);
+                return;
+            }
             const effectivePrompt = generationContext.prompt.trim();
             sensitiveValues.push(effectivePrompt);
             if (runController.signal.aborted) {
@@ -3177,6 +3193,7 @@ function InfiniteCanvasPage() {
 
                     const controller = rootId === nodeId ? runController : startGenerationRequest(rootId, nodeId, nodeId, runController);
                     let hasSuccess = false;
+                    let successCount = 0;
                     let hasFailure = false;
                     let firstError = "";
                     await Promise.all(
@@ -3223,6 +3240,7 @@ function InfiniteCanvasPage() {
                                     }),
                                 );
                                 hasSuccess = true;
+                                successCount += 1;
                                 if (isConfigNode) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
                                 return true;
                             } catch (error) {
@@ -3257,6 +3275,7 @@ function InfiniteCanvasPage() {
                                   : node,
                         ),
                     );
+                    if (successCount) recordGenerationSuccess(successCount);
                     return;
                 }
 
@@ -3320,6 +3339,7 @@ function InfiniteCanvasPage() {
                                     : node,
                             ),
                         );
+                        recordGenerationSuccess(1);
                     } finally {
                         finishGenerationRequest(videoId, controller);
                     }
@@ -3358,6 +3378,7 @@ function InfiniteCanvasPage() {
                             generationConfig.audioFormat,
                         );
                         setNodes((prev) => prev.map((node) => (node.id === audioId ? { ...node, metadata: { ...node.metadata, ...audioMetadata(audio), prompt: effectivePrompt, ...buildAudioGenerationMetadata(generationConfig) } } : node)));
+                        recordGenerationSuccess(1);
                     } finally {
                         finishGenerationRequest(audioId, controller);
                     }
@@ -3485,6 +3506,7 @@ function InfiniteCanvasPage() {
                             : node;
                     }),
                 );
+                if (completedTexts.length) recordGenerationSuccess(completedTexts.length);
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 recordGenerationError(error);
@@ -3536,6 +3558,7 @@ function InfiniteCanvasPage() {
             }
 
             let context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+            const recordRetrySuccess = () => useCanvasErrorLogStore.getState().recordSuccess({ projectId, nodeId: node.id, model: generationConfig.model, stage: "重试生成" }, 1);
             let prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
             if (!prompt) {
                 message.warning(t("canvas.projectPage.retryPromptMissing"));
@@ -3592,6 +3615,8 @@ function InfiniteCanvasPage() {
                     prompt = composeCanvasCreativePrompt(context.prompt, sourceNode.metadata?.creativePresets, node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : node.type === CanvasNodeType.Text ? "text" : "image").trim();
                     retryImages = context.referenceImages;
                 }
+                const hairError = canvasHairReferenceError(sourceNode.metadata?.creativePresets, node.type === CanvasNodeType.Image ? "image" : "video", retryImages.length);
+                if (hairError) throw new Error(hairError);
                 if (node.type === CanvasNodeType.Text) {
                     if (!context) return;
                     let streamed = "";
@@ -3605,6 +3630,7 @@ function InfiniteCanvasPage() {
                         { signal: controller.signal },
                     );
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Text, metadata: { ...item.metadata, content: answer || streamed, prompt, status: NODE_STATUS_SUCCESS } } : item)));
+                    recordRetrySuccess();
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
@@ -3633,11 +3659,13 @@ function InfiniteCanvasPage() {
                                 : item,
                         ),
                     );
+                    recordRetrySuccess();
                     return;
                 }
                 if (node.type === CanvasNodeType.Audio) {
                     const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, prompt, { signal: controller.signal }), generationConfig.audioFormat);
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...audioMetadata(audio), prompt, ...buildAudioGenerationMetadata(generationConfig) } } : item)));
+                    recordRetrySuccess();
                     return;
                 }
 
@@ -3690,6 +3718,7 @@ function InfiniteCanvasPage() {
                         };
                     }),
                 );
+                recordRetrySuccess();
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 useCanvasErrorLogStore.getState().record(error, { projectId, nodeId: node.id, nodeName: node.title, model: generationConfig.model, stage: "重试生成" }, [generationConfig.apiKey, generationConfig.systemPrompt, prompt, ...generationConfig.channels.flatMap((channel) => [channel.apiKey, channel.consumerApiKey || ""])]);

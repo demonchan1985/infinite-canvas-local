@@ -29,7 +29,7 @@ function CanvasErrorLogDialog({ projectId, onClose }: { projectId: string; onClo
     const copyText = useCopyText();
     return <Modal title={`日志 · ${entries.length} 条`} open onCancel={onClose} footer={null} width={800} centered>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs" style={{ color: theme.node.muted }}>诊断仅保留在当前会话；刷新可重新收集卡片已有错误。不保存 Key、请求正文和素材。</span>
+            <span className="text-xs" style={{ color: theme.node.muted }}>本次会话记录生成成功与失败；刷新后仅能重新收集卡片已有错误。不保存 Key、请求正文和素材。</span>
             <div className="flex gap-1">
                 <Button type="text" icon={<Copy className="size-4" />} disabled={!entries.length} onClick={() => copyText(formatCanvasErrorLogs(entries), "日志已复制")}>复制全部</Button>
                 <Button type="text" icon={<Trash2 className="size-4" />} disabled={!entries.length} onClick={() => clear(projectId)}>清空</Button>
@@ -38,7 +38,7 @@ function CanvasErrorLogDialog({ projectId, onClose }: { projectId: string; onClo
         <div className="max-h-[65vh] space-y-3 overflow-y-auto">
             {entries.length ? entries.map((entry) => <section key={entry.id} className="rounded-xl border p-3" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
                 <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 text-sm font-medium">{entry.nodeName || entry.nodeId} · {entry.stage}</div>
+                    <div className="min-w-0 text-sm font-medium">{entry.nodeName || entry.nodeId} · {entry.stage} · {entry.status === "success" ? "成功" : "失败"}</div>
                     <Button type="text" size="small" icon={<Copy className="size-3.5" />} onClick={() => copyText(formatCanvasErrorLogs([entry]), "该条日志已复制")}>复制</Button>
                 </div>
                 <div className="mb-2 text-xs" style={{ color: theme.node.muted }}>{new Date(entry.timestamp).toLocaleString()} · {entry.model || "未记录模型"}</div>

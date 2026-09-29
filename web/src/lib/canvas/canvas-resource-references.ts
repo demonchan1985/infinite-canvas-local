@@ -60,11 +60,7 @@ export function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[],
 }
 
 export function getGenerationResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
-    const configInputs = getConnectedConfigInputNodes(nodeId, nodes, connections);
-    if (configInputs.length) return configInputs;
-    const ownInputs = getContextInputNodes(nodeId, nodes, connections);
-    if (ownInputs.length) return ownInputs;
-    return [];
+    return getContextInputNodes(nodeId, nodes, connections);
 }
 
 function getContextInputNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

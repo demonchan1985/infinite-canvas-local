@@ -1,5 +1,5 @@
 import { Button, Input, Segmented, Tooltip } from "antd";
-import { Clapperboard, Palette, Search, SlidersHorizontal, Sparkles, X, type LucideIcon } from "lucide-react";
+import { Clapperboard, Droplets, Palette, Scissors, Search, SlidersHorizontal, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
@@ -39,6 +39,8 @@ const creativeToolMeta: Record<CanvasCreativePresetKind, CreativeToolMeta> = {
     mj: { icon: Sparkles, label: "MJ 码图", description: "选择 Midjourney 风格码与参数" },
     motion: { icon: Clapperboard, label: "运镜", description: "选择视频镜头运动" },
     filter: { icon: SlidersHorizontal, label: "滤镜", description: "选择色彩与质感处理" },
+    hairstyle: { icon: Scissors, label: "换发型", description: "选择人物发型" },
+    haircolor: { icon: Droplets, label: "换发色", description: "选择人物发色与挑染" },
 };
 
 export function CanvasCreativeTools({ mode, value, disabled = false, onChange }: CanvasCreativeToolsProps) {
@@ -193,7 +195,7 @@ function CreativePresetBrowser({ kind, selected, theme, onSelect }: { kind: Excl
     const categories = useMemo(() => ["全部", ...new Set(presets.map((preset) => preset.category))], [presets]);
     const items = useMemo(() => {
         const normalized = query.trim().toLowerCase();
-        return presets.filter((preset) => (category === "全部" || preset.category === category) && (!normalized || `${preset.name} ${preset.description}`.toLowerCase().includes(normalized)));
+        return presets.filter((preset) => (category === "全部" || preset.category === category) && (!normalized || `${preset.id} ${preset.name} ${preset.description}`.toLowerCase().includes(normalized)));
     }, [category, presets, query]);
     const meta = creativeToolMeta[kind];
 
@@ -203,15 +205,14 @@ function CreativePresetBrowser({ kind, selected, theme, onSelect }: { kind: Excl
                 <span className="text-sm font-semibold" style={{ color: theme.node.text }}>{meta.label}</span>
                 <span className="text-[11px]" style={{ color: theme.node.muted }}>{items.length} 项</span>
             </div>
+            {kind === "hairstyle" || kind === "haircolor" ? <p className="mb-2 px-1 text-[11px] leading-4" style={{ color: theme.node.muted }}>连接人物参考图后生成。预览为款式示例；发型与发色可分别选择或组合。</p> : null}
             <label className="mb-2 flex h-9 items-center gap-2 rounded-lg border px-2" style={{ background: theme.node.fill, borderColor: theme.toolbar.border }}>
                 <Search className="size-3.5 shrink-0" style={{ color: theme.node.muted }} aria-hidden="true" />
                 <Input value={query} onChange={(event) => setQuery(event.target.value)} variant="borderless" className="!min-w-0 !flex-1 !p-0 !text-xs" placeholder={`搜索${meta.label}`} aria-label={`搜索${meta.label}`} />
             </label>
-            <div className="thin-scrollbar mb-2 flex max-w-full gap-1 overflow-x-auto pb-1" aria-label={`${meta.label}分类`}>
-                {categories.map((item) => (
-                    <button key={item} type="button" className="h-7 shrink-0 rounded-full border px-2 text-[11px] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" style={{ borderColor: theme.toolbar.border, background: category === item ? theme.toolbar.activeBg : "transparent", color: category === item ? theme.toolbar.activeText : theme.node.muted }} onClick={() => setCategory(item)} aria-pressed={category === item}>{item}</button>
-                ))}
-            </div>
+            <select className="!mb-3 block h-8 w-full min-w-0 rounded-lg border px-2 text-xs outline-none" style={{ background: theme.node.fill, borderColor: theme.toolbar.border, color: theme.node.text }} value={category} onChange={(event) => setCategory(event.target.value)} aria-label={`${meta.label}分类`}>
+                {categories.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
             <div className="thin-scrollbar grid max-h-[34rem] grid-cols-3 gap-2 overflow-y-auto pr-1">
                 {items.map((preset) => <CreativePresetCard key={preset.id} preset={preset} active={selected?.id === preset.id} theme={theme} onClick={() => onSelect(preset)} />)}
                 {!items.length ? <div className="col-span-full py-10 text-center text-xs" style={{ color: theme.node.muted }}>没有匹配的预设，请换个关键词。</div> : null}
@@ -289,7 +290,7 @@ function MjPresetBrowser({ selected, theme, onSelect }: { selected?: CanvasCreat
 function CreativePresetCard({ preset, active, theme, onClick }: { preset: CanvasCreativePreset; active: boolean; theme: CanvasTheme; onClick: () => void }) {
     return (
         <button type="button" className="group overflow-hidden rounded-xl border text-left transition hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" style={{ borderColor: active ? theme.toolbar.activeText : theme.toolbar.border, background: theme.node.fill, color: theme.node.text }} onClick={onClick} aria-pressed={active} aria-label={`应用${preset.name}`}>
-            {preset.poster || preset.preview ? <img src={preset.poster || preset.preview} alt="" loading="lazy" decoding="async" className="aspect-[4/3] w-full object-cover" /> : <span className="grid aspect-[4/3] place-items-center" style={{ background: theme.toolbar.activeBg }}><Palette className="size-5" /></span>}
+            {preset.poster || preset.preview ? <img src={preset.poster || preset.preview} alt="" loading="lazy" decoding="async" className={`${preset.kind === "hairstyle" || preset.kind === "haircolor" ? "aspect-square" : "aspect-[4/3]"} w-full object-cover`} /> : <span className="grid aspect-[4/3] place-items-center" style={{ background: theme.toolbar.activeBg }}>{preset.kind === "hairstyle" || preset.kind === "haircolor" ? <span className="text-[11px]" style={{ color: theme.node.muted }}>暂无预览</span> : <Palette className="size-5" />}</span>}
             <span className="block truncate px-2 py-1.5 text-[11px] font-medium">{preset.name}</span>
         </button>
     );

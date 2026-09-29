@@ -25,7 +25,7 @@ export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
-export type CanvasCreativePresetKind = "style" | "mj" | "motion" | "filter";
+export type CanvasCreativePresetKind = "style" | "mj" | "motion" | "filter" | "hairstyle" | "haircolor";
 
 export type CanvasCreativePreset = {
     id: string;

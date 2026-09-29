@@ -34,6 +34,25 @@ test("错误日志按最新在前排列，并可按画布清空；取消任务�
     assert.deepEqual(useCanvasErrorLogStore.getState().entries.map((entry) => entry.projectId), ["two"]);
 });
 
+test("日志同时列出成功和失败且成功项不含请求内容", () => {
+    useCanvasErrorLogStore.getState().clear();
+    const store = useCanvasErrorLogStore.getState();
+    store.record(new Error("失败"), { projectId: "canvas-1", nodeId: "failed" });
+    store.recordSuccess({ projectId: "canvas-1", nodeId: "result-1", nodeName: "private-prompt data:image/png;base64,AAAA", model: "image-model", stage: "生成" }, 2);
+    const entries = useCanvasErrorLogStore.getState().entries;
+    assert.deepEqual(entries.map((entry) => entry.status), ["success", "error"]);
+    assert.equal(entries[0].resultCount, 2);
+    assert.equal(entries[0].nodeId, "result-1");
+    assert.equal(entries[0].model, "image-model");
+    assert.doesNotMatch(formatCanvasErrorLogs(entries), /private-prompt|apiKey|images|base64,AAAA/i);
+});
+
+test("没有写入结果时不产生成功日志", () => {
+    useCanvasErrorLogStore.getState().clear();
+    useCanvasErrorLogStore.getState().recordSuccess({ projectId: "canvas-1", nodeId: "result-1", model: "image-model" }, 0);
+    assert.equal(useCanvasErrorLogStore.getState().entries.length, 0);
+});
+
 test("错误响应中的 JSON 转义提示词和凭据同样脱敏", () => {
     useCanvasErrorLogStore.getState().clear();
     const prompt = 'private first line\nsecond "quoted" line';
